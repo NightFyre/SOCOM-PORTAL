@@ -4,6 +4,8 @@ Remaking the classic SOCOM experience inside Battlefield 2042 Portal
 ## Overview
 This project recreates the tactical, team-based gameplay of the classic SOCOM series within Battlefield 2042's Portal mode. Experience the intense, strategic combat that made SOCOM legendary with modern graphics and mechanics.
 
+**📚 [Complete Documentation Index](INDEX.md)** | **🚀 [Quick Start Guide](docs/QUICK_START.md)**
+
 ## Features
 - Classic SOCOM game modes (Suppression, Extraction, Demolition)
 - Tactical team-based gameplay
