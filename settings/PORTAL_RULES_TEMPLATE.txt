@@ -1,0 +1,350 @@
+# SOCOM Portal Rules Template
+# Copy and paste sections as needed into Battlefield 2042 Portal Rules Editor
+
+# ==============================================================================
+# BASIC SUPPRESSION MODE RULES
+# ==============================================================================
+
+## Disable Respawn on Death
+Rule: "Disable Respawn"
+Event: OnPlayerDied
+Conditions: None
+Actions:
+  - DisableRespawn(EventPlayer)
+  - SetSpectatorTarget(EventPlayer, RandomTeammate)
+
+## Check Team Elimination
+Rule: "Check Team Eliminated"
+Event: OnPlayerDied
+Conditions: CountAlive(EventPlayer.Team) == 0
+Actions:
+  - RoundVictory(OpposingTeam)
+  - AddScoreToTeam(OpposingTeam, 1)
+
+## Round Start Setup
+Rule: "Round Start"
+Event: OnRoundStart
+Conditions: None
+Actions:
+  - EnableRespawnForAll()
+  - SetRoundTimer(180)
+  - EnableDamage()
+  - ResetPlayerStats()
+
+## Round Timer Expired
+Rule: "Round Timeout"
+Event: OnRoundTimerExpired
+Conditions: None
+Actions:
+  - If CountAlive(Team1) > CountAlive(Team2)
+      Then RoundVictory(Team1)
+  - Else If CountAlive(Team2) > CountAlive(Team1)
+      Then RoundVictory(Team2)
+  - Else
+      Then DrawRound()
+
+## Match Victory Check
+Rule: "Check Match Victory"
+Event: OnRoundEnd
+Conditions: None
+Actions:
+  - If Team1Score >= 6
+      Then MatchVictory(Team1)
+  - Else If Team2Score >= 6
+      Then MatchVictory(Team2)
+  - Else
+      Then StartNewRound()
+
+# ==============================================================================
+# DEMOLITION MODE RULES (Bomb Plant/Defuse)
+# ==============================================================================
+
+## Variables Needed
+GlobalVariables:
+  - BombPlanted (Boolean)
+  - BombCarrier (Player)
+  - PlantTimer (Number)
+  - DefuseTimer (Number)
+  - PostPlantTimer (Number)
+
+## Assign Bomb Carrier
+Rule: "Assign Bomb Carrier"
+Event: OnRoundStart
+Conditions: None
+Actions:
+  - BombCarrier = RandomPlayer(Attackers)
+  - SetPlayerVariable(BombCarrier, "HasBomb", True)
+  - DisplayMessage(BombCarrier, "You have the bomb!")
+  - MarkPlayerWithIcon(BombCarrier, BombIcon)
+
+## Plant Bomb
+Rule: "Plant Bomb"
+Event: OnPlayerInteract
+Conditions:
+  - EventPlayer == BombCarrier
+  - IsAtObjective(EventPlayer)
+  - BombPlanted == False
+Actions:
+  - StartProgressBar(EventPlayer, 5)
+  - OnProgressComplete:
+      - BombPlanted = True
+      - PostPlantTimer = 45
+      - DisplayMessageToAll("Bomb has been planted!")
+      - StartPostPlantTimer(45)
+      - MarkObjectiveWithIcon(ObjectiveSite, BombIcon)
+
+## Defuse Bomb
+Rule: "Defuse Bomb"
+Event: OnPlayerInteract
+Conditions:
+  - EventPlayer.Team == Defenders
+  - IsAtBombSite(EventPlayer)
+  - BombPlanted == True
+Actions:
+  - StartProgressBar(EventPlayer, 7)
+  - OnProgressComplete:
+      - BombPlanted = False
+      - RoundVictory(Defenders)
+      - DisplayMessageToAll("Bomb has been defused!")
+
+## Bomb Explodes
+Rule: "Bomb Detonates"
+Event: OnTimerExpired
+Conditions: PostPlantTimer <= 0 AND BombPlanted == True
+Actions:
+  - RoundVictory(Attackers)
+  - DisplayMessageToAll("Bomb detonated!")
+  - CreateExplosion(BombLocation)
+
+## Bomb Carrier Killed
+Rule: "Bomb Dropped"
+Event: OnPlayerDied
+Conditions: EventPlayer == BombCarrier
+Actions:
+  - DropBomb(EventPlayer.Position)
+  - MarkLocationWithIcon(EventPlayer.Position, BombIcon)
+  - DisplayMessageToAll("Bomb has been dropped!")
+
+## Pick Up Dropped Bomb
+Rule: "Pick Up Bomb"
+Event: OnPlayerInteract
+Conditions:
+  - EventPlayer.Team == Attackers
+  - IsNearDroppedBomb(EventPlayer)
+Actions:
+  - BombCarrier = EventPlayer
+  - SetPlayerVariable(BombCarrier, "HasBomb", True)
+  - DisplayMessage(EventPlayer, "You have the bomb!")
+  - MarkPlayerWithIcon(BombCarrier, BombIcon)
+
+# ==============================================================================
+# EXTRACTION MODE RULES (Hostage Rescue)
+# ==============================================================================
+
+## Variables Needed
+GlobalVariables:
+  - HostageRescued (Boolean)
+  - HostageCarrier (Player)
+  - HostageLocation (Vector)
+  - ExtractionZone (Vector)
+
+## Rescue Hostage
+Rule: "Rescue Hostage"
+Event: OnPlayerInteract
+Conditions:
+  - EventPlayer.Team == Attackers
+  - IsNearHostage(EventPlayer)
+  - HostageRescued == False
+Actions:
+  - StartProgressBar(EventPlayer, 3)
+  - OnProgressComplete:
+      - HostageCarrier = EventPlayer
+      - HostageRescued = True
+      - DisplayMessage(EventPlayer, "Escorting hostage")
+      - SetMovementSpeed(EventPlayer, 0.7)
+      - AttachHostageToPlayer(EventPlayer)
+
+## Extract Hostage
+Rule: "Extract Hostage"
+Event: OnPlayerEnterZone
+Conditions:
+  - EventPlayer == HostageCarrier
+  - IsInExtractionZone(EventPlayer)
+Actions:
+  - RoundVictory(Attackers)
+  - DisplayMessageToAll("Hostage extracted!")
+
+## Hostage Carrier Killed
+Rule: "Hostage Carrier Killed"
+Event: OnPlayerDied
+Conditions: EventPlayer == HostageCarrier
+Actions:
+  - HostageRescued = False
+  - HostageLocation = EventPlayer.Position
+  - MarkLocationWithIcon(HostageLocation, HostageIcon)
+  - DisplayMessageToAll("Hostage needs to be rescued again!")
+
+# ==============================================================================
+# FRIENDLY FIRE RULES (Optional)
+# ==============================================================================
+
+## Track Team Kills
+Rule: "Team Kill Tracking"
+Event: OnPlayerDied
+Conditions: Attacker.Team == Victim.Team
+Actions:
+  - AddToPlayerVariable(Attacker, "TeamKills", 1)
+  - DisplayMessage(Attacker, "WARNING: Team Kill!")
+  - SubtractFromPlayerScore(Attacker, 100)
+
+## Auto-Kick for Team Killing
+Rule: "Team Kill Auto-Kick"
+Event: OnPlayerDied
+Conditions:
+  - Attacker.Team == Victim.Team
+  - GetPlayerVariable(Attacker, "TeamKills") >= 3
+Actions:
+  - DisplayMessageToAll("Player kicked for team killing")
+  - KickPlayer(Attacker)
+
+## Reflect Team Damage (Hardcore)
+Rule: "Reflect Team Damage"
+Event: OnPlayerDamaged
+Conditions:
+  - Attacker.Team == Victim.Team
+  - Attacker != Victim
+Actions:
+  - CancelDamage()
+  - ApplyDamage(Attacker, EventDamage)
+
+# ==============================================================================
+# UTILITY RULES
+# ==============================================================================
+
+## Spawn Protection
+Rule: "Spawn Protection"
+Event: OnPlayerSpawn
+Conditions: None
+Actions:
+  - SetPlayerInvulnerable(EventPlayer, True)
+  - SetPlayerInvisible(EventPlayer, True)
+  - Wait(3)
+  - SetPlayerInvulnerable(EventPlayer, False)
+  - SetPlayerInvisible(EventPlayer, False)
+
+## Disable Vehicles
+Rule: "Prevent Vehicle Entry"
+Event: OnPlayerEnterVehicle
+Conditions: None
+Actions:
+  - ForceExitVehicle(EventPlayer)
+  - DisplayMessage(EventPlayer, "Vehicles are disabled")
+
+## Disable Specialist Abilities
+Rule: "Disable Specialist Gadgets"
+Event: OnPlayerSpawn
+Conditions: None
+Actions:
+  - DisableSpecialistAbility(EventPlayer)
+  - DisableSpecialistGadget(EventPlayer)
+
+## HUD Management
+Rule: "Configure HUD"
+Event: OnRoundStart
+Conditions: None
+Actions:
+  - DisableElement(Minimap)  # Optional
+  - EnableElement(Crosshair)
+  - EnableElement(AmmoCounter)
+  - EnableElement(HealthBar)
+  - EnableElement(Compass)  # Optional
+
+## Timer Warnings
+Rule: "30 Second Warning"
+Event: OnRoundTimer
+Conditions: RoundTimeRemaining == 30
+Actions:
+  - DisplayMessageToAll("30 seconds remaining!")
+  - PlaySound(WarningSound)
+
+Rule: "10 Second Warning"
+Event: OnRoundTimer
+Conditions: RoundTimeRemaining == 10
+Actions:
+  - DisplayMessageToAll("10 seconds remaining!")
+  - PlaySound(UrgentSound)
+
+## MVP Tracking
+Rule: "Track MVP"
+Event: OnRoundEnd
+Conditions: None
+Actions:
+  - MVP = GetHighestScorePlayer()
+  - DisplayMessageToAll("MVP: " + MVP.Name)
+  - AddBonusScore(MVP, 100)
+
+## Scoreboard Update
+Rule: "Update Scores"
+Event: OnRoundEnd
+Conditions: None
+Actions:
+  - DisplayScoreboard()
+  - ShowRoundStats()
+  - Wait(5)
+  - HideScoreboard()
+
+# ==============================================================================
+# NOTES FOR PORTAL EDITOR
+# ==============================================================================
+
+# 1. Rules are processed in order - organize logically
+# 2. Use descriptive rule names for easier debugging
+# 3. Test each rule individually before combining
+# 4. Comment your rules for future reference
+# 5. Use variables to track game state
+# 6. Consider performance - avoid unnecessary checks
+# 7. Test with different player counts
+# 8. Verify all win conditions work correctly
+# 9. Test edge cases (draws, timeouts, etc.)
+# 10. Get community feedback before finalizing
+
+# ==============================================================================
+# TESTING CHECKLIST
+# ==============================================================================
+
+# [ ] Respawns disabled during rounds
+# [ ] Teams can win by elimination
+# [ ] Round timer works correctly
+# [ ] Match victory triggers properly
+# [ ] Spectator mode functions
+# [ ] Spawn protection active
+# [ ] Vehicles disabled (if applicable)
+# [ ] Friendly fire works (if enabled)
+# [ ] Objectives function correctly
+# [ ] HUD elements display properly
+# [ ] Round transitions smoothly
+# [ ] Scores track accurately
+# [ ] Tie-breaker rules work
+# [ ] All win conditions tested
+# [ ] Edge cases handled
+
+# ==============================================================================
+# TROUBLESHOOTING
+# ==============================================================================
+
+# Issue: Players keep respawning
+# Solution: Check DisableRespawn rule fires on death
+
+# Issue: Round never ends
+# Solution: Verify team elimination check and timer logic
+
+# Issue: Scores not updating
+# Solution: Check AddScoreToTeam actions in win conditions
+
+# Issue: Spectator not working
+# Solution: Verify SetSpectatorTarget uses valid teammates
+
+# Issue: Rules not firing
+# Solution: Check conditions are met and rule order
+
+# ==============================================================================
