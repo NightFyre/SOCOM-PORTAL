@@ -1,0 +1,20 @@
+# exclude Portal SDK
+PortalSDK/
+
+# exclude binaries
+bin/
+obj/
+debug/
+release/
+
+*.exe
+*.dll
+*.so
+
+# exclude personal settings
+*.user
+*.suo
+*.log
+*.tmp
+*.bak
+*.code-workspace
