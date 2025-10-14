@@ -5,10 +5,18 @@
 This project aims to recreate **SOCOM-style tactical gameplay** within Battlefield 6’s Portal mode.  
 Our goal is to bring back the classic **team-based, objective-focused combat** that defined SOCOM — complete with **original maps, mission types, and rulesets**.
 
-## 🗺️ Features
+## 🗒️ Roadmap
+- Team balancing logic
+- Implement Round Management System
+- Add Victory Condition Detection
+- Create Spectator System
+- Add UI & Hud Elements
+- Map Specific Spawn Logic
+- Additional Game Modes ( Breach , Escort . . . )
+
+## 🗺️ Intended Features
 - **Classic Game Modes**
   - Demolition
-  - Breach
   - Suppression
 - **Authentic Map Remakes**
   - Crossroads
@@ -26,7 +34,6 @@ Our goal is to bring back the classic **team-based, objective-focused combat** t
 | `/gamemodes` | Custom SOCOM-style game modes implemented for Portal |
 | `/assets` | Media, references, and supporting files |
 | `/docs` | Design notes, changelogs, and project documentation |
-| `/scripts` | Helper scripts for packaging, validation, and maintenance |
 
 ## 🧠 Development
 This project uses **Battlefield Portal Logic Editor (BFPortal)** and **JSON-based logic scripting**.
@@ -53,13 +60,6 @@ cd maps/Crossroads
 
 # Copy JSON logic into Battlefield Portal
 ```
-
-## 🗒️ Roadmap
-- Core game mode framework (Demolition)
-- Base map logic
-- Import/export automation
-- Team balancing logic
-- Sound/visual references for classic SOCOM maps
 
 ## ⚖️ License
 
