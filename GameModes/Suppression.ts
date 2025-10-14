@@ -14,7 +14,7 @@ export function OnPlayerJoinGame(eventPlayer: mod.Player): void
     //  mod.DisplayNotificationMessage(welcomeMessage, eventPlayer); 
  
     /* log event */
-    console.log(`Player Joined: ID: ${seal.playerID} | TeamID: ${seal.teamID}`);\
+    console.log(`Player Joined: ID: ${seal.playerID} | TeamID: ${seal.teamID}`);
 }
 
 // Triggered when player leaves the game. Useful for clean up logic, team management, etc.
@@ -83,8 +83,32 @@ export function OnPlayerEarnedKill(
     if (!killerSeal || !victimSeal) 
         return;
 
-    if (killerSeal.playerID !== victimSeal.playerID) 
-        killerSeal.stats.kills++;
+    /* check for self-harm */
+    if (killerSeal === victimSeal)
+    {
+        console.log(`Player ${killerSeal.playerID} killed themselves`);
+        return;
+    }
+
+    /* check for friendly fire */
+    let bFriendlyFire = killerSeal.teamID === victimSeal.teamID;
+    if (bFriendlyFire)
+    {
+        killerSeal.stats.friendlyFireKills++; // increment friendly fire kills count
+        victimSeal.stats.friendlyFireDeaths++; // increment friendly fire deaths count
+        console.log(`Player ${killerSeal.playerID} killed friendly Player ${victimSeal.playerID}`);
+
+        /* HANDLE EXCESSIVE FRIENDLY FIRE */
+        if (killerSeal.stats.friendlyFireKills >= 2)
+        {
+            mod.Kill(killerSeal.player); // kill the killer for excessive friendly fire
+            console.log(`Player ${killerSeal.playerID} killed for excessive friendly fire`);
+        }
+
+        return;
+    }
+
+    killerSeal.stats.kills++;
 
     console.log(`Player ${killerSeal.playerID} killed Player ${victimSeal.playerID}`);
 }
@@ -102,13 +126,34 @@ export function OnPlayerDamaged(
     if (!victim || !shooter) 
         return;
 
+    /* check for self-harm */
+    if (victim.playerID === shooter.playerID)
+    {
+        console.log(`Player ${shooter.playerID} hit themselves`);
+        return;
+    }
+
+    /* check for friendly fire */
     let bFriendlyFire = victim.teamID === shooter.teamID;
     if (bFriendlyFire)
     {
+        shooter.stats.shotsOnFriendly++; // increment shots on friendly count
+        victim.stats.shotsTakenByFriendly++; // increment shots taken by friendly count
+        console.log(`Player ${shooter.playerID} hit friendly Player ${victim.playerID}`);
 
+        /* HANDLE EXCESSIVE FRIENDLY FIRE */
+        if (shooter.stats.shotsOnFriendly > 5 && shooter.stats.friendlyFireKills >= 2)
+        {
+            mod.Heal(victim.player, victim.maxHealth * 0.25); // heal the victim for 25% of max health
+            shooter.Disarm(); // disarm the shooter , prvents further friendly fire & exploiting the health system
+            console.log(`Player ${shooter.playerID} penalized for excessive friendly fire`);
+        }
+
+        return; // don't count friendly fire as a hit
     }
-    victim.stats.damageTaken++; // increment damage taken count
-    shooter.stats.damageDealt++; // increment damage dealt count
+
+    /* update stats */
+    victim.stats.shotsTaken++; // increment shots taken count
     shooter.stats.shotsHit++; // increment shots hit count
 
     // log damage info
@@ -154,6 +199,9 @@ class CZSealStats
     shotsHit: number = 0; // shots that hit an enemy
     shotsOnFriendly: number = 0; // shots that hit a friendly
     shotsTaken: number = 0; // times shot
+    shotsTakenByFriendly: number = 0; // times shot by friendly
+    friendlyFireDeaths: number = 0; // deaths by friendly fire
+    friendlyFireKills: number = 0; // kills by friendly fire
 }
 
 class CZSeal 
@@ -241,6 +289,19 @@ class CZSeal
         
         /* update camera */
         mod.SetCameraTypeForPlayer(this.player, this.isZooming ? mod.Cameras.FirstPerson : mod.Cameras.ThirdPerson);
+    }
+
+    /* removes all equipment from the player */
+    Disarm()
+    {
+        mod.RemoveEquipment(this.player, mod.InventorySlots.PrimaryWeapon); // remove primary weapon from player
+        mod.RemoveEquipment(this.player, mod.InventorySlots.SecondaryWeapon); // remove secondary weapon from player
+        mod.RemoveEquipment(this.player, mod.InventorySlots.Throwable); // remove thrown weapon from player
+        mod.RemoveEquipment(this.player, mod.InventorySlots.MeleeWeapon); // remove melee weapon from player
+        mod.RemoveEquipment(this.player, mod.InventorySlots.GadgetOne); // remove gadget one from player
+        mod.RemoveEquipment(this.player, mod.InventorySlots.GadgetTwo); // remove gadget two from player
+        mod.RemoveEquipment(this.player, mod.InventorySlots.ClassGadget); // remove class gadget from player
+        mod.RemoveEquipment(this.player, mod.InventorySlots.MiscGadget); // remove misc gadget from player
     }
 }
 
