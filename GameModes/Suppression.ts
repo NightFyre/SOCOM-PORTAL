@@ -1,0 +1,258 @@
+////////////////////////////////// PLAYER EVENTS ///////////////////////////////////////
+
+// Triggered when player joins the game. Useful for pregame setup, team management, etc.
+export function OnPlayerJoinGame(eventPlayer: mod.Player): void 
+{  
+    /* get seal instance */
+    let seal = CZSeal.get(eventPlayer);
+    if (!seal)
+        return; // invalid seal object
+    
+    /* Display Welcome Message */
+    //  const welcomeMessage = mod.Message('welcome to SOCOM Portal!');
+    //  mod.DisplayNotificationMessage(welcomeMessage, eventPlayer); 
+ 
+    /* log event */
+    console.log(`Player Joined: ID: ${seal.playerID} | TeamID: ${seal.teamID}`);
+}
+
+// Triggered when player leaves the game. Useful for clean up logic, team management, etc.
+export function OnPlayerLeaveGame(eventNumber: number): void 
+{
+    /* eventNumber is playerID */
+    CZSeal.remove(eventNumber);
+}
+
+// Triggered when player selects their class and deploys into game. Useful for any spawn/start logic.
+export function OnPlayerDeployed(eventPlayer: mod.Player): void 
+{
+    /* get seal instance */
+    let seal = CZSeal.get(eventPlayer);
+    if (!seal)
+        return; // invalid seal object
+
+    /* set seal state */
+    seal.hasSpawned = true;
+    seal.isAlive = true;
+
+    /* log event */
+    console.log(`Player Spawned: ID: ${seal.playerID} | TeamID: ${seal.teamID}`);
+
+    /* set camera type to 3rd person */
+    if (!seal.isAI)
+        mod.SetCameraTypeForPlayer(eventPlayer, mod.Cameras.ThirdPerson);
+}
+
+// This will trigger when the Player dies and returns to the deploy screen.
+export function OnPlayerUndeploy(eventPlayer: mod.Player): void 
+{
+    let seal = CZSeal.get(eventPlayer);
+    if (!seal) 
+        return; // invalid seal object
+    
+    seal.isAlive = false;
+}
+
+// Triggered on player death/kill, returns dying player, the killer, etc. Useful for updating scores, updating progression, handling any death/kill related logic.
+export function OnPlayerDied(
+    eventPlayer: mod.Player, 
+    eventOtherPlayer: mod.Player, 
+    eventDeathType: mod.DeathType, 
+    eventWeaponUnlock: mod.WeaponUnlock
+): void {
+    let seal = CZSeal.get(eventPlayer);
+    if (!seal) 
+        return;
+    
+    seal.isAlive = false;
+    seal.stats.deaths++;
+    
+    console.log(`Player ${seal.playerID} died. Checking for round end...`);
+}
+
+export function OnPlayerEarnedKill(
+    eventPlayer: mod.Player,
+    eventOtherPlayer: mod.Player,
+    eventDeathType: mod.DeathType,
+    eventWeaponUnlock: mod.WeaponUnlock
+): void 
+{
+    let killerSeal = CZSeal.get(eventPlayer);
+    let victimSeal = CZSeal.get(eventOtherPlayer);
+    if (!killerSeal || !victimSeal) 
+        return;
+
+    if (killerSeal.playerID !== victimSeal.playerID) 
+        killerSeal.stats.kills++;
+
+    console.log(`Player ${killerSeal.playerID} killed Player ${victimSeal.playerID}`);
+}
+
+// Triggered when a player is damaged, returns same variables as OnPlayerDied. Useful for custom on damage logic and updating custom UI.
+export function OnPlayerDamaged(
+    eventPlayer: mod.Player,
+    eventOtherPlayer: mod.Player,
+    eventDamageType: mod.DamageType,
+    eventWeaponUnlock: mod.WeaponUnlock
+): void 
+{
+    let victim = CZSeal.get(eventPlayer);
+    let shooter = CZSeal.get(eventOtherPlayer);
+    if (!victim || !shooter) 
+        return;
+
+    victim.stats.damageTaken++; // increment damage taken count
+    shooter.stats.damageDealt++; // increment damage dealt count
+    shooter.stats.shotsHit++; // increment shots hit count
+
+    // log damage info
+    console.log(`Player ${shooter.playerID} damaged Player ${victim.playerID}`);
+}
+
+
+/////////////////////// GAMEMODE EVENTS //////////////////////////////
+
+// This will trigger when the gamemode time limit has been reached.
+export function OnTimeLimitReached(): void {}
+
+// Triggered on main gamemode start/end. Useful for game start setup and cleanup.
+export async function OnGameModeStarted() 
+{
+    /* Don't force auto spawn here - let the round system control it */ 
+    console.log("SOCOM Suppression mode started");
+    
+    /* start the match */
+    mod.SetSpawnMode(mod.SpawnModes.AutoSpawn);
+}
+
+// This will trigger when the gamemode ends.
+export function OnGameModeEnding(): void {}
+
+export function OngoingGlobal(): void 
+{
+    // Check all players for camera updates (runs every frame)
+    for (let player of CZSeal.sealObjects)
+    {
+        let seal = CZSeal.get(player);
+        if (seal && seal.isAlive)
+            seal.CameraUpdate();
+    }
+}
+
+/// --------------------------------- CZSEAL --------------------------------- ///
+
+class CZSealStats
+{
+    kills: number = 0;
+    deaths: number = 0;
+    assists: number = 0;
+    headshots: number = 0;
+    damageDealt: number = 0;
+    damageTaken: number = 0;
+    shotsFired: number = 0;
+    shotsHit: number = 0;
+    accuracy: number = 0;
+}
+
+class CZSeal 
+{
+    player: mod.Player;
+    playerID: number;
+    teamID: number;
+    isAI: boolean;
+    hasSpawned: boolean = false;
+    isAlive: boolean = false;
+    maxHealth = 100;
+    currentHealth = 100;
+    isZooming: boolean = false;
+
+    // seal stats
+    stats: CZSealStats = new CZSealStats();
+
+    // static list of all player instances
+    static sealObjects: mod.Player[] = [];
+
+    /* should only be created via CZSeal.get() */
+    constructor(player: mod.Player)
+    {
+        this.player = player;
+        this.playerID = mod.GetObjId(player);
+        this.teamID = mod.GetObjId(mod.GetTeam(player));
+        this.isAI = mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier);
+        CZSeal.sealObjects.push(player);
+    }
+
+    // static list of all seal players by playerID
+    static #allSealPlayers: { [key: number]: CZSeal } = {};
+
+    /* should only be accessed via OnPlayer Events , a new Seal will be created if none exists */
+    static get(player: mod.Player)
+    {
+        let playerID = mod.GetObjId(player);
+        if (playerID > -1)
+        {
+            let seal = CZSeal.#allSealPlayers[playerID];
+            if (!seal)
+            {
+                seal = new CZSeal(player);
+                CZSeal.#allSealPlayers[playerID] = seal;
+                console.log(`Created new CZSeal for PlayerID: ${playerID}`);
+            }
+
+            return seal;
+        }
+        return undefined;
+    }
+
+    /* should only be accessed via OnPlayerLeaveGame Event */
+    static remove(playerID: number)
+    {
+        //  let playerID = mod.GetObjId(player);
+        if (playerID <= -1)
+            return;
+
+        delete this.#allSealPlayers[playerID];
+        console.log(`Removed CZSeal for PlayerID: ${playerID}`);
+    }
+
+    /* call in game update to update camera state */
+    CameraUpdate()
+    {
+        /* verify valid state */
+        if (!this.isAlive || !this.hasSpawned || this.isAI)
+            return;
+        
+        /* get zoom state */
+        let isCurrentlyZooming = mod.GetSoldierState(this.player, mod.SoldierStateBool.IsZooming);
+        if (isCurrentlyZooming == this.isZooming)
+            return;
+
+        /* set zoom state */
+        this.isZooming = isCurrentlyZooming;
+        
+        /* update camera */
+        mod.SetCameraTypeForPlayer(this.player, this.isZooming ? mod.Cameras.FirstPerson : mod.Cameras.ThirdPerson);
+    }
+}
+
+/* */
+class CZMatchData
+{
+    isMatchActive: boolean = false;
+    roundNum: number = 0; // current rounds
+    roundMax: number = 11; // best of 11 rounds
+    roundTime: number = 240; // in seconds ( 4 minutes )
+    roundTimeMax: number = 240; // in seconds ( 4 minutes )
+    roundStarted: boolean = false; // true when round is active, false when round is not active
+    roundEnded: boolean = false; // true when round ends, false when round is active
+    currentPlayers: number = 0;
+    minPlayers: number = 2;
+    maxPlayers: number = 16;
+    scores: number[] = [0, 0]; // rounds won
+    names: string[] = ["Seals", "Insurgents"];
+    players: CZSeal[] = [];
+    gameMode: string = "Suppression"; // or "Demolition"
+    //  mapName: string = mod.GetCurrentMapName();
+    winningTeam: number = 0; // 0 = no team, 1 = team 1, 2 = team 2
+    roundWinner: number = 0; // 0 = no team, 1 = team 1, 2 = team 2
+}
