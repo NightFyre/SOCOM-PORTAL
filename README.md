@@ -6,13 +6,31 @@ This project aims to recreate **SOCOM-style tactical gameplay** within Battlefie
 Our goal is to bring back the classic **team-based, objective-focused combat** that defined SOCOM — complete with **original maps, mission types, and rulesets**.
 
 ## 🗒️ Roadmap
-- Team balancing logic
-- Implement Round Management System
-- Add Victory Condition Detection
-- Create Spectator System
-- Add UI & Hud Elements
-- Map Specific Spawn Logic
-- Additional Game Modes ( Breach , Escort . . . )
+
+### 🧱 Phase 1: Core Foundations
+- [x] Player State system  
+- [x] Player Stats tracking  
+- [ ] Team balancing logic
+- [ ] Round management system  
+- [ ] Victory condition detection  
+
+### 🎮 Phase 2: Gameplay Mechanics
+- [x] 3rd Person Camera
+- [ ] Spectator system  
+- [ ] Respawn & extraction logic  
+- [ ] Objective interaction zones (bomb plant, hostage rescue, etc.)  
+- [ ] Map-specific spawn logic  
+
+### 🧩 Phase 3: User Interface & Experience
+- [ ] In-game UI & HUD elements (scoreboard, health, round timer)  
+- [ ] Pre-round loadout / team selection menu  
+- [ ] Victory screen and post-match summary  
+- [ ] Audio cues & announcer events  
+
+### 🗺️ Phase 4: Content Expansion
+- [ ] Additional SOCOM game modes (Breach, Escort, Demolition)  
+- [ ] Map ports & layout balancing  
+- [ ] Environment interactions (doors, climbable spots, etc.)  
 
 ## 🗺️ Intended Features
 - **Classic Game Modes**
