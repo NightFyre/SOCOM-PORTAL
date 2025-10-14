@@ -319,7 +319,8 @@ class CZSeal
     }
 }
 
-/* */
+/// ------------------------------ CZMATCHDATA ------------------------------- ///
+
 class CZMatchData
 {
     isMatchActive: boolean = false;
