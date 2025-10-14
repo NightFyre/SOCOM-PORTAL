@@ -1,3 +1,4 @@
+
 ////////////////////////////////// PLAYER EVENTS ///////////////////////////////////////
 
 // Triggered when player joins the game. Useful for pregame setup, team management, etc.
@@ -14,6 +15,14 @@ export function OnPlayerJoinGame(eventPlayer: mod.Player): void
  
     /* log event */
     console.log(`Player Joined: ID: ${seal.playerID} | TeamID: ${seal.teamID}`);
+    
+    // Auto-designate admin for testing (you can modify this logic or remove it)
+    // For now, let's make the first player an admin automatically
+    if (CZSeal.sealObjects.length === 1) {
+        seal.isAdmin = true;
+        const adminMsg = mod.Message("You are now designated as a game admin!");
+        mod.DisplayHighlightedWorldLogMessage(adminMsg, eventPlayer);
+    }
 }
 
 // Triggered when player leaves the game. Useful for clean up logic, team management, etc.
@@ -165,6 +174,7 @@ class CZSeal
     maxHealth = 100;
     currentHealth = 100;
     isZooming: boolean = false;
+    isAdmin: boolean = false; // Track if this player is an admin
 
     // seal stats
     stats: CZSealStats = new CZSealStats();
@@ -213,6 +223,12 @@ class CZSeal
 
         delete this.#allSealPlayers[playerID];
         console.log(`Removed CZSeal for PlayerID: ${playerID}`);
+    }
+    
+    /* get a CZSeal by playerID - useful for admin system */
+    static getPlayerByID(playerID: number): CZSeal | undefined
+    {
+        return this.#allSealPlayers[playerID];
     }
 
     /* call in game update to update camera state */
