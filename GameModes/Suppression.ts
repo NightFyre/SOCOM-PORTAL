@@ -14,15 +14,7 @@ export function OnPlayerJoinGame(eventPlayer: mod.Player): void
     //  mod.DisplayNotificationMessage(welcomeMessage, eventPlayer); 
  
     /* log event */
-    console.log(`Player Joined: ID: ${seal.playerID} | TeamID: ${seal.teamID}`);
-    
-    // Auto-designate admin for testing (you can modify this logic or remove it)
-    // For now, let's make the first player an admin automatically
-    if (CZSeal.sealObjects.length === 1) {
-        seal.isAdmin = true;
-        const adminMsg = mod.Message("You are now designated as a game admin!");
-        mod.DisplayHighlightedWorldLogMessage(adminMsg, eventPlayer);
-    }
+    console.log(`Player Joined: ID: ${seal.playerID} | TeamID: ${seal.teamID}`);\
 }
 
 // Triggered when player leaves the game. Useful for clean up logic, team management, etc.
@@ -110,6 +102,11 @@ export function OnPlayerDamaged(
     if (!victim || !shooter) 
         return;
 
+    let bFriendlyFire = victim.teamID === shooter.teamID;
+    if (bFriendlyFire)
+    {
+
+    }
     victim.stats.damageTaken++; // increment damage taken count
     shooter.stats.damageDealt++; // increment damage dealt count
     shooter.stats.shotsHit++; // increment shots hit count
@@ -152,15 +149,11 @@ export function OngoingGlobal(): void
 
 class CZSealStats
 {
-    kills: number = 0;
-    deaths: number = 0;
-    assists: number = 0;
-    headshots: number = 0;
-    damageDealt: number = 0;
-    damageTaken: number = 0;
-    shotsFired: number = 0;
-    shotsHit: number = 0;
-    accuracy: number = 0;
+    kills: number = 0; // number of kills
+    deaths: number = 0; // number of times died 
+    shotsHit: number = 0; // shots that hit an enemy
+    shotsOnFriendly: number = 0; // shots that hit a friendly
+    shotsTaken: number = 0; // times shot
 }
 
 class CZSeal 
