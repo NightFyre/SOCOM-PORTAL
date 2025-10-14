@@ -32,6 +32,9 @@ export function OnPlayerDeployed(eventPlayer: mod.Player): void
     if (!seal)
         return; // invalid seal object
 
+    if (seal.hasSpawned)
+        return; // already spawned
+
     /* set seal state */
     seal.hasSpawned = true;
     seal.isAlive = true;
@@ -185,8 +188,19 @@ export function OngoingGlobal(): void
     for (let player of CZSeal.sealObjects)
     {
         let seal = CZSeal.get(player);
-        if (seal && seal.isAlive)
-            seal.CameraUpdate();
+        if (!seal)
+            continue;
+
+        /* update camera state */
+        if (!seal.isAI && seal.isAlive)
+            seal.CameraUpdate(); // update camera state if alive and not AI
+
+        /* disarm and teleport dead players out of the play area */
+        if (!seal.isAlive)
+        {
+            mod.Teleport(seal.player, mod.CreateVector(0, 0, 0), 0); // teleport to origin when dead
+            seal.Disarm(); // disarm when dead
+        }
     }
 }
 
