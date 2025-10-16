@@ -6,7 +6,6 @@ bin/
 obj/
 debug/
 release/
-
 *.exe
 *.dll
 *.so
