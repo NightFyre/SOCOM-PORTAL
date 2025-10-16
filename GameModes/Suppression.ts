@@ -41,7 +41,7 @@ export function OnPlayerJoinGame(eventPlayer: mod.Player): void
         matchData.bots++;
 
     /* log event */
-    // CZConsole.log("Player Joined: ID: {} | TeamID: {}", seal.playerID, seal.teamID);
+    CZConsole.log("Player Joined: ID: {} | TeamID: {}", seal.playerID, seal.teamID);
 }
 
 // Triggered when player leaves the game. Useful for clean up logic, team management, etc.
@@ -60,7 +60,7 @@ export function OnPlayerLeaveGame(eventNumber: number): void
     }
 
     /* log event */
-    //  CZConsole.log("Player Left: ID: {} | TeamID: {}", seal.playerID, seal.teamID);
+    CZConsole.log("Player Left: ID: {} | TeamID: {}", seal.playerID, seal.teamID);
 
     /* remove player */
     CZSeal.remove(eventNumber);
@@ -96,6 +96,8 @@ export function OnPlayerDeployed(eventPlayer: mod.Player): void
         mod.Wait(1); // wait 1 frame
         mod.SetCameraTypeForPlayer(eventPlayer, mod.Cameras.ThirdPerson); // set to third person
     }
+
+    console.log(`Player ${seal.playerID} deployed | isAI: ${seal.isAI}`);
 }
 
 // This will trigger when the Player dies and returns to the deploy screen.
@@ -113,98 +115,17 @@ export function OnPlayerDied( eventPlayer: mod.Player,  eventOtherPlayer: mod.Pl
     if (!matchData || matchData.state !== GameState.RoundActive)
         return;
 
-    /* get seal killer instance */
-    let killerSeal = CZSeal.get(eventOtherPlayer); // might not be a killer (e.g. environment death)
-
     /* get seal victim instance */
     let victim = CZSeal.get(eventPlayer);
     if (!victim || !victim.isAlive) // player already dead , ignore
         return;
 
-    victim.isAlive = false;
-    victim.stats.deaths++;
+    victim.OnPlayerDied(eventDeathType, eventOtherPlayer);
 
-    
-    // @TODO: bug - occasionally team elimination does not trigger decrements to alivePlayers , need to investigate why
-    // @TODO: bug - first death will result in round ending in a draw , need to investigate why
-    // @TODO: bug - round ends when the local player - admin is killed , need to investigate why
-
-    let victimTeam = mod.GetTeam(eventPlayer);
-    let victimTeamID = mod.GetObjId(victimTeam);
-    let victimTeamAlivePlayers = matchData.getAlivePlayers(victimTeam); // update alive players for the team
-
-    let otherTeamID = victimTeamID === 0 ? 1 : 0;
-    let otherTeam = mod.GetTeam(otherTeamID);
-    let otherTeamAlivePlayers = matchData.getAlivePlayers(otherTeam);
-
-    let team1Alive = otherTeamID === 0 ? otherTeamAlivePlayers.length : victimTeamAlivePlayers.length;
-    let team2Alive = otherTeamID === 0 ? victimTeamAlivePlayers.length : otherTeamAlivePlayers.length;
-    
-    /* check for team elimination - only end round if ALL players on a team are dead */
-    let winner: number | null = null;
-    if (team1Alive > 0 && team2Alive === 0)
-        winner = 1; // team 1 wins
-    else if (team2Alive > 0 && team1Alive === 0)
-        winner = 2; // team 2 wins
-    
-    log.info(mod.Message("[+] SEALS Alive: {} | MERCS Alive: {}", team1Alive, team2Alive));
-    if (winner === null)
-        return; // no winner yet , round continues
-
-    matchData.endRound(winner);
+    matchData.OnElimination(eventPlayer);
 }
 
-export function OnPlayerEarnedKill( eventPlayer: mod.Player, eventOtherPlayer: mod.Player, eventDeathType: mod.DeathType, eventWeaponUnlock: mod.WeaponUnlock ): void 
-{
-    /* ignore redeploy deaths */
-    if (mod.EventDeathTypeCompare(eventDeathType, mod.PlayerDeathTypes.Redeploy))
-        return;
-
-    /* get killer seal instance */
-    let killerSeal = CZSeal.get(eventPlayer);
-    if (!killerSeal)
-        return;
-
-    /* get victim seal instance */
-    let victimSeal = CZSeal.get(eventOtherPlayer);
-    if (!victimSeal)
-        return;
-
-    /* check for self-harm */
-    if (killerSeal === victimSeal)
-    {
-        console.log(`Player ${killerSeal.playerID} killed themselves`);
-        log.info(mod.Message("[!] Player {} killed themselves", killerSeal.playerID));
-        return;
-    }
-
-    /* check for friendly fire */
-    let bFriendlyFire = killerSeal.teamID === victimSeal.teamID;
-    if (bFriendlyFire)
-    {
-        killerSeal.stats.friendlyFireKills++; // increment friendly fire kills count
-        victimSeal.stats.friendlyFireDeaths++; // increment friendly fire deaths count
-        console.log(`Player ${killerSeal.playerID} killed friendly Player ${victimSeal.playerID}`);
-        log.info(mod.Message("[~] Player {} killed friendly Player {}", killerSeal.playerID, victimSeal.playerID));
-
-        /* HANDLE EXCESSIVE FRIENDLY FIRE */
-        if (killerSeal.stats.friendlyFireKills >= 2)
-        {
-            mod.Kill(killerSeal.player); // kill the killer for excessive friendly fire
-            console.log(`Player ${killerSeal.playerID} killed for excessive friendly fire`);
-            log.info(mod.Message("[!] Player {} killed for excessive friendly fire", killerSeal.playerID));
-        }
-
-        return;
-    }
-
-    killerSeal.stats.kills++;
-    if (mod.EventDeathTypeCompare(eventDeathType, mod.PlayerDeathTypes.Headshot))
-        killerSeal.stats.headshotKills++;
-
-    console.log(`Player ${killerSeal.playerID} killed Player ${victimSeal.playerID}`);
-    log.info(mod.Message("[+] Player {} killed Player {}", killerSeal.playerID, victimSeal.playerID));
-}
+export function OnPlayerEarnedKill( eventPlayer: mod.Player, eventOtherPlayer: mod.Player, eventDeathType: mod.DeathType, eventWeaponUnlock: mod.WeaponUnlock ): void { }
 
 // Triggered when a player is damaged, returns same variables as OnPlayerDied. Useful for custom on damage logic and updating custom UI.
 export function OnPlayerDamaged(
@@ -215,49 +136,10 @@ export function OnPlayerDamaged(
 ): void 
 {
     let victim = CZSeal.get(eventPlayer);
-    if (!victim)
+    if (!victim || !victim.isAlive) // player already dead , ignore
         return;
 
-    //  mod.EventDamageTypeCompare(eventDamageType, mod.PlayerDamageTypes.)
-
-    let shooter = CZSeal.get(eventOtherPlayer);
-    if (!victim || !shooter) 
-        return;
-
-    /* check for self-harm */
-    if (victim.playerID === shooter.playerID)
-    {
-        console.log(`Player ${shooter.playerID} hit themselves`);
-        return;
-    }
-
-    /* check for friendly fire */
-    let bFriendlyFire = victim.teamID === shooter.teamID;
-    if (bFriendlyFire)
-    {
-        shooter.stats.shotsOnFriendly++; // increment shots on friendly count
-        victim.stats.shotsTakenByFriendly++; // increment shots taken by friendly count
-        console.log(`Player ${shooter.playerID} hit friendly Player ${victim.playerID}`);
-
-        /* HANDLE EXCESSIVE FRIENDLY FIRE */
-        if (shooter.stats.shotsOnFriendly > 5 && shooter.stats.friendlyFireKills >= 2)
-        {
-            mod.Heal(victim.player, victim.maxHealth * 0.25); // heal the victim for 25% of max health
-            shooter.Disarm(); // disarm the shooter , prvents further friendly fire & exploiting the health system
-            console.log(`Player ${shooter.playerID} penalized for excessive friendly fire`);
-        }
-
-        return; // don't count friendly fire as a hit
-    }
-
-    /* update stats */
-    victim.stats.shotsTaken++; // increment shots taken count
-    shooter.stats.shotsHit++; // increment shots hit count
-    if (mod.EventDamageTypeCompare(eventDamageType, mod.PlayerDamageTypes.Headshot))
-        shooter.stats.headshots++; // increment headshot count if headshot
-
-    // log damage info
-    console.log(`Player ${shooter.playerID} damaged Player ${victim.playerID}`);
+    victim.OnPlayerDamaged(eventDamageType, eventOtherPlayer);
 }
 
 
@@ -272,8 +154,9 @@ export async function OnGameModeStarted()
 {
     log.info(mod.Message("SOCOM PORTAL - Suppression Game Mode Started"));
 
-    /* override spawn mode - auto spawn */
-    mod.SetSpawnMode(mod.SpawnModes.AutoSpawn);
+    /* override spawn mode - deploy */
+    mod.SetSpawnMode(mod.SpawnModes.Deploy);
+    mod.EnableAllPlayerDeploy(false);
 
     /* create match data instance */
     let matchData = CZMatchData.get();
@@ -281,6 +164,7 @@ export async function OnGameModeStarted()
     while (true)
     {
         await matchData.update();
+
         if (shouldExitLoop)
             break;
     }
@@ -305,7 +189,7 @@ export function OnGameModeEnding(): void
     //
     //    CZSeal.remove(seal.playerID);
     //}
-    //CZSeal.sealObjects = []; // clear the seal objects array
+    //CZSeal.sealObjects = []; // clear the seal objects array  
 
     log.info(mod.Message("SOCOM PORTAL - Suppression Game Mode Ended"));
 }
@@ -326,16 +210,25 @@ export function OngoingGlobal(): void
             continue;
 
         /* update camera state */
-        if (!seal.isAI && seal.isAlive)
-            seal.CameraUpdate(); // update camera state if alive and not AI
+        seal.CameraUpdate(); // update camera state if alive and not AI
 
         /* disarm and teleport dead players out of the play area */
-        if (!seal.isAlive && matchData.state === GameState.RoundActive)
+        //  if (!seal.isAlive && matchData.state === GameState.RoundActive)
+        //  {
+        //      //  if (mod.GetSoldierState(seal.player, mod.SoldierStateBool.IsAlive))
+        //      //      mod.Kill(seal.player); // ensure player is dead
+        //      //  mod.Teleport(seal.player, mod.CreateVector(0, 0, 0), 0); // teleport to origin when dead
+        //      //  seal.Disarm(); // disarm when dead
+        //  }
+        
+        //if (matchData.isGamePlayActive())
+        if (matchData.state === GameState.RoundActive || matchData.state === GameState.RoundEnd || matchData.state === GameState.MatchEnd)
         {
-            if (mod.GetSoldierState(seal.player, mod.SoldierStateBool.IsAlive))
-                mod.Kill(seal.player); // ensure player is dead
-            //  mod.Teleport(seal.player, mod.CreateVector(0, 0, 0), 0); // teleport to origin when dead
-            //  seal.Disarm(); // disarm when dead
+            /* handle "dead" players & AI */
+            if (!seal.isAlive && mod.GetSoldierState(seal.player, mod.SoldierStateBool.IsAlive))
+            {
+                seal.setAIBehavior(false);
+            }
         }
 
         if (matchData.state === GameState.RoundEnd || matchData.state === GameState.MatchEnd)
@@ -348,18 +241,64 @@ export function OngoingGlobal(): void
 
 /// --------------------------------- CZSEAL --------------------------------- ///
 
+
+export enum SoldierCameraView
+{
+    RightShoulder,
+    LeftShoulder
+}
+
 class CZSealStats
 {
-    kills: number = 0; // number of kills
-    deaths: number = 0; // number of times died 
-    headshots: number = 0; // number of headshots
-    headshotKills: number = 0; // number of headshot kills
-    shotsHit: number = 0; // shots that hit an enemy
-    shotsOnFriendly: number = 0; // shots that hit a friendly
-    shotsTaken: number = 0; // times shot
-    shotsTakenByFriendly: number = 0; // times shot by friendly
-    friendlyFireDeaths: number = 0; // deaths by friendly fire
-    friendlyFireKills: number = 0; // kills by friendly fire
+    kills: number[] = [0, 0]; // number of kills
+    deaths: number[] = [0, 0]; // number of times died
+    headshots: number[] = [0, 0]; // number of headshots
+    headshotKills: number[] = [0, 0]; // number of headshot kills
+    shotsHit: number[] = [0, 0]; // shots that hit an enemy
+    shotsOnFriendly: number[] = [0, 0]; // shots that hit a friendly
+    shotsTaken: number[] = [0, 0]; // times shot
+    shotsTakenByFriendly: number[] = [0, 0]; // times shot by friendly
+    friendlyFireDeaths: number[] = [0, 0]; // deaths by friendly fire
+    friendlyFireKills: number[] = [0, 0]; // kills by friendly fire
+
+    // Reset round stats
+    resetRound(): void
+    {
+        this.kills[1] += this.kills[0];
+        this.kills[0] = 0; // reset round stats
+        this.deaths[1] += this.deaths[0];
+        this.deaths[0] = 0; // reset round stats
+        this.headshots[1] += this.headshots[0];
+        this.headshots[0] = 0; // reset round stats
+        this.headshotKills[1] += this.headshotKills[0];
+        this.headshotKills[0] = 0; // reset round stats
+        this.shotsHit[1] += this.shotsHit[0];
+        this.shotsHit[0] = 0; // reset round stats
+        this.shotsOnFriendly[1] += this.shotsOnFriendly[0];
+        this.shotsOnFriendly[0] = 0; // reset round stats
+        this.shotsTaken[1] += this.shotsTaken[0];
+        this.shotsTaken[0] = 0; // reset round stats
+        this.shotsTakenByFriendly[1] += this.shotsTakenByFriendly[0];
+        this.shotsTakenByFriendly[0] = 0; // reset round stats
+        this.friendlyFireDeaths[1] += this.friendlyFireDeaths[0];
+        this.friendlyFireDeaths[0] = 0; // reset round stats
+        this.friendlyFireKills[1] += this.friendlyFireKills[0];
+        this.friendlyFireKills[0] = 0; // reset round stats
+    }
+
+    reset(): void
+    {
+        this.kills = [0, 0];
+        this.deaths = [0, 0];
+        this.headshots = [0, 0];
+        this.headshotKills = [0, 0];
+        this.shotsHit = [0, 0];
+        this.shotsOnFriendly = [0, 0];
+        this.shotsTaken = [0, 0];
+        this.shotsTakenByFriendly = [0, 0];
+        this.friendlyFireDeaths = [0, 0];
+        this.friendlyFireKills = [0, 0];
+    }
 }
 
 class CZSeal 
@@ -375,6 +314,7 @@ class CZSeal
     isZooming: boolean = false;
     isArmed: boolean = true;
     isAdmin: boolean = false; // Track if this player is an admin
+    cameraView: SoldierCameraView = SoldierCameraView.RightShoulder; // current camera view mode
 
     // seal stats
     stats: CZSealStats = new CZSealStats();
@@ -387,7 +327,7 @@ class CZSeal
     {
         this.player = player;
         this.playerID = mod.GetObjId(player);
-        this.teamID = mod.GetObjId(mod.GetTeam(player)); // teamID should be 0 or 1
+        this.teamID = mod.GetObjId(mod.GetTeam(player)); // teamID should be 1 or 2
         this.isAI = mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier);
         CZSeal.sealObjects.push(player);
     }
@@ -443,11 +383,15 @@ class CZSeal
     }
 
     /* call in game update to update camera state */
+    static debugTPSCameraIndex = 0;
+    static debugFPSCameraIndex = 0;
     CameraUpdate(): void
     {
         /* verify valid state */
-        if (!this.isAlive || !this.hasSpawned || this.isAI)
+        if (!this.hasSpawned || this.isAI || !this.isAlive)
             return;
+
+        let currentShoulder = this.cameraView === SoldierCameraView.RightShoulder ? 0 : 1;
         
         /* get zoom state */
         let isCurrentlyZooming = mod.GetSoldierState(this.player, mod.SoldierStateBool.IsZooming);
@@ -458,7 +402,110 @@ class CZSeal
         this.isZooming = isCurrentlyZooming;
         
         /* update camera */
-        mod.SetCameraTypeForPlayer(this.player, this.isZooming ? mod.Cameras.FirstPerson : mod.Cameras.ThirdPerson);
+        mod.SetCameraTypeForPlayer(this.player, this.isZooming ? mod.Cameras.FirstPerson : mod.Cameras.ThirdPerson, currentShoulder);
+    }
+
+    /* triggered when the player is damaged */
+    OnPlayerDamaged(eventDamageType: mod.DamageType, eventOtherPlayer: mod.Player): void
+    {
+        if (!this.isAlive)
+            return;
+
+        let newHealth = mod.GetSoldierState(this.player, mod.SoldierStateNumber.CurrentHealth);
+        let damageReceived = this.currentHealth - newHealth;
+        this.currentHealth = newHealth; // sync current health
+
+        let shooter = CZSeal.get(eventOtherPlayer as mod.Player);
+        if (!shooter || !shooter.isAlive) // shooter is not alive , ignore
+            return;
+
+        /* check for self-harm */
+        if (this.playerID === shooter.playerID)
+        {
+            console.log(`Player ${shooter.playerID} hit themselves`);
+            return;
+        }
+
+        /* check for friendly fire */
+        let bFriendlyFire = this.teamID === shooter.teamID;
+        if (bFriendlyFire)
+        {
+            shooter.stats.shotsOnFriendly[0]++; // increment shots on friendly count
+            this.stats.shotsTakenByFriendly[0]++; // increment shots taken by friendly count
+            console.log(`Player ${shooter.playerID} hit friendly Player ${this.playerID}`);
+
+            /* HANDLE EXCESSIVE FRIENDLY FIRE */
+            if (shooter.stats.shotsOnFriendly[0] > 5 && shooter.stats.friendlyFireKills[0] >= 2)
+            {
+                mod.Heal(this.player, this.maxHealth * 0.25); // heal the victim for 25% of max health
+                shooter.Disarm(); // disarm the shooter , prvents further friendly fire & exploiting the health system
+                console.log(`Player ${shooter.playerID} penalized for excessive friendly fire`);
+            }
+
+            return; // don't count friendly fire as a hit
+        }
+
+        /* update stats */
+        this.stats.shotsTaken[0]++; // increment shots taken count
+        shooter.stats.shotsHit[0]++; // increment shots hit count
+        if (mod.EventDamageTypeCompare(eventDamageType, mod.PlayerDamageTypes.Headshot))
+            shooter.stats.headshots[0]++; // increment headshot count if headshot
+
+        // log damage info
+        console.log(`Player ${shooter.playerID} damaged Player ${this.playerID}`);
+    }
+
+    /* triggered when the player dies */
+    OnPlayerDied(eventDeathType: mod.DeathType, eventOtherPlayer: mod.Player | undefined): void
+    {
+        if (!this.isAlive)
+            return;
+
+        this.isAlive = false;
+        this.stats.deaths[0]++;
+        this.currentHealth = 0;
+
+        /* get killer seal instance */
+        let killerSeal = CZSeal.get(eventOtherPlayer as mod.Player);
+        if (!killerSeal || !killerSeal.isAlive) // killer is not alive , ignore
+            return;
+
+        /* check for self-harm */
+        if (killerSeal === this)
+        {
+            console.log(`Player ${killerSeal.playerID} killed themselves`);
+            //  log.info(mod.Message("[!] Player {} killed themselves", killerSeal.playerID));
+            return;
+        }
+
+        /* check for friendly fire */
+        let bFriendlyFire = killerSeal.teamID === this.teamID;
+        if (bFriendlyFire)
+        {
+            killerSeal.stats.friendlyFireKills[0]++; // increment friendly fire kills count
+            this.stats.friendlyFireDeaths[0]++; // increment friendly fire deaths count
+            console.log(`Player ${killerSeal.playerID} killed friendly Player ${this.playerID}`);
+            //  log.info(mod.Message("[~] Player {} killed friendly Player {}", killerSeal.playerID, this.playerID));
+
+            /* HANDLE EXCESSIVE FRIENDLY FIRE */
+            if (killerSeal.stats.friendlyFireKills[0] >= 2)
+            {
+                mod.Kill(killerSeal.player); // kill the killer for excessive friendly fire
+                console.log(`Player ${killerSeal.playerID} killed for excessive friendly fire`);
+                //  log.info(mod.Message("[!] Player {} killed for excessive friendly fire", killerSeal.playerID));
+            }
+
+            return;
+        }
+
+        killerSeal.stats.kills[0]++;
+        if (mod.EventDeathTypeCompare(eventDeathType, mod.PlayerDeathTypes.Headshot))
+            killerSeal.stats.headshotKills[0]++;
+
+        mod.SetCameraTypeForPlayer(this.player, mod.Cameras.Free); // set death camera
+
+        console.log(`Player ${killerSeal.playerID} killed Player ${this.playerID}`);
+        //  log.info(mod.Message("[+] Player {} killed Player {}", killerSeal.playerID, this.playerID));
     }
 
     /* called on each new round , resets state members */
@@ -469,6 +516,9 @@ class CZSeal
         this.isZooming = false;
         this.isArmed = true;
         mod.DeployPlayer(this.player); // deploy the player
+        mod.SetCameraTypeForPlayer(this.player, mod.Cameras.ThirdPerson, this.cameraView === SoldierCameraView.RightShoulder ? 0 : 1);
+        this.setAIBehavior(true); // restore AI behavior
+
     }
 
     /* removes all equipment from the player */
@@ -487,6 +537,62 @@ class CZSeal
         mod.RemoveEquipment(this.player, mod.InventorySlots.MiscGadget); // remove misc gadget from player
 
         this.isArmed = false;   // prevent subsequent disarm calls
+    }
+
+
+    /* UTILITY METHODS */
+
+    /* returns health percent (0-100) */
+    getHealthPercent() : number
+    {
+        let currentHealth = mod.GetSoldierState(this.player, mod.SoldierStateNumber.CurrentHealth);
+        let maxHealth = mod.GetSoldierState(this.player, mod.SoldierStateNumber.MaxHealth);
+        return (currentHealth / maxHealth) * 100;
+    }
+
+    /* returns yaw angle in radians */
+    getYawAngleRadians() : number
+    {
+        let look = mod.GetSoldierState(this.player, mod.SoldierStateVector.GetFacingDirection);
+        let x = mod.XComponentOf(look);
+        let z = mod.ZComponentOf(look);
+        return mod.ArctangentInRadians(x / z);
+    }
+
+    /* returns a position projected forward from the player by the specified distance */
+    getProjectedForwardPosition(distance: number) : mod.Vector
+    {
+        let origin = mod.GetSoldierState(this.player, mod.SoldierStateVector.GetPosition);
+        let look = mod.GetSoldierState(this.player, mod.SoldierStateVector.GetFacingDirection);
+        let forward = mod.Multiply(look, distance);
+        return mod.Add(origin, forward);
+    }
+
+    /* teleports the player to the specified world position & retains the current look direction */
+    setWorldPosition(position: mod.Vector): void
+    {
+        mod.Teleport(this.player, position, this.getYawAngleRadians());
+    }
+
+    /* enables or disables AI behavior for the bot instance */
+    setAIBehavior(state: boolean): void
+    {
+        if (!this.isAI)
+            return;
+
+
+        mod.AIEnableShooting(this.player, state);
+        mod.AIEnableTargeting(this.player, state);
+
+        if (state)
+        {
+            mod.AIBattlefieldBehavior(this.player);
+        }
+        else
+        {
+            mod.AIIdleBehavior(this.player);
+            mod.AISetStance(this.player, mod.Stance.Crouch);
+        }
     }
 }
 
@@ -555,6 +661,10 @@ class CZMatchData
             default: break;
         }
 
+        let timeLeft = this.roundTime;
+        let minutes = Math.floor(timeLeft / 60);
+        let seconds = timeLeft % 60;
+        console.log(`Match State: ${GameState[this.state]} | Round: ${this.roundNum}/${this.roundMax} | Time Left: ${minutes}:${seconds.toString().padStart(2, '0')} | Score: ${this.scores[0]} - ${this.scores[1]} | Players: ${this.currentPlayers} (Bots: ${this.bots})`);
         await mod.Wait(1); // wait 1 second before next update
     }
 
@@ -577,6 +687,8 @@ class CZMatchData
         this.scores = [0, 0];
         this.matchTime = 0;
 
+        console.log("Starting Match");
+
         await this.preRound(); // start the first round immediately
     }
 
@@ -585,20 +697,44 @@ class CZMatchData
         mod.DisplayNotificationMessage(mod.Message("Final Score: {} - {}", this.scores[0], this.scores[1]));
         this.state = GameState.MatchEnd;
 
+        // log seal stats
+        console.log(`SEALS Rounds Won: ${this.scores[0]}`);
+        for (let player of CZSeal.sealObjects)
+        {
+            let seal = CZSeal.get(player);
+            if (!seal)
+                continue;
+
+            if (seal.teamID !== 1)
+                continue; // only log team 1 (SEALS) stats for now
+            console.log(`Player [${seal.playerID}] Stats: Kills: ${seal.stats.kills[1]}, Deaths: ${seal.stats.deaths[1]}, Headshots: ${seal.stats.headshots[1]}, Headhshot Kills: ${seal.stats.headshotKills[1]}, Shots on Friendly: ${seal.stats.shotsOnFriendly[1]}, Friendly Fire Kills: ${seal.stats.friendlyFireKills[1]}`);
+            seal.stats.reset(); // reset all stats
+        }
+
+        console.log(`MERCS Rounds Won: ${this.scores[1]}`);
+        for (let player of CZSeal.sealObjects)
+        {
+            let seal = CZSeal.get(player);
+            if (!seal)
+                continue;
+            if (seal.teamID !== 2)
+                continue; // only log team 2 (MERCS) stats for now
+            console.log(`Player [${seal.playerID}] Stats: Kills: ${seal.stats.kills[1]}, Deaths: ${seal.stats.deaths[1]}, Headshots: ${seal.stats.headshots[1]}, Headhshot Kills: ${seal.stats.headshotKills[1]}, Shots on Friendly: ${seal.stats.shotsOnFriendly[1]}, Friendly Fire Kills: ${seal.stats.friendlyFireKills[1]}`);
+            seal.stats.reset(); // reset all stats
+        }
+
         await mod.Wait(15); // wait 15 seconds before resetting the match
 
         let host = this.getHostPlayer();
         if (host)
             mod.EndGameMode(host);
-        
-        /* @TODO: tally up scores , update player stats , etc. */
-
     }
 
     async preRound(): Promise<void>
     {
         this.setupPlayers(); // respawn all players for the new round
         this.state = GameState.PreRound; // transition to pre-round state
+        console.log(`Preparing for Round ${this.roundNum + 1}`);
     }
 
     async startRound(): Promise<void>
@@ -623,7 +759,36 @@ class CZMatchData
         else
             mod.DisplayNotificationMessage(mod.Message("Round {} ended in a draw", this.roundNum));
 
-        // Check for match end
+        console.log(`Round ${this.roundNum} ended. Winner: ${winner === 0 ? 'Draw' : this.getTeamName(winner - 1)} | Score: ${this.scores[0]} - ${this.scores[1]}`);
+
+        /* log seal stats */
+        console.log("SEALS");
+        for (let player of CZSeal.sealObjects)
+        {
+            let seal = CZSeal.get(player);
+            if (!seal)
+                continue;
+
+            if (seal.teamID !== 1)
+                continue; // only log team 1 (SEALS) stats for now
+            console.log(`Player [${seal.playerID}][${seal.getHealthPercent().toFixed(0)}%] Stats: Kills: ${seal.stats.kills[0]}, Deaths: ${seal.stats.deaths[0]}, Headshots: ${seal.stats.headshots[0]}, Headhshot Kills: ${seal.stats.headshotKills[0]}, Shots on Friendly: ${seal.stats.shotsOnFriendly[0]}, Friendly Fire Kills: ${seal.stats.friendlyFireKills[0]}`);
+            seal.stats.resetRound(); // reset round stats
+        }
+
+        /* log merc stats */
+        console.log("MERCS");
+        for (let player of CZSeal.sealObjects)
+        {
+            let seal = CZSeal.get(player);
+            if (!seal)
+                continue;
+            if (seal.teamID !== 2)
+                continue; // only log team 2 (MERCS) stats for now
+            console.log(`Player [${seal.playerID}][${seal.getHealthPercent().toFixed(0)}%] Stats: Kills: ${seal.stats.kills[0]}, Deaths: ${seal.stats.deaths[0]}, Headshots: ${seal.stats.headshots[0]}, Headhshot Kills: ${seal.stats.headshotKills[0]}, Shots on Friendly: ${seal.stats.shotsOnFriendly[0]}, Friendly Fire Kills: ${seal.stats.friendlyFireKills[0]}`);
+            seal.stats.resetRound(); // reset round stats
+        }
+
+        /* Check for match end */
         if (this.scores[0] >= 6 || this.scores[1] >= 6 || this.roundNum >= this.roundMax)
             await this.endMatch();
         else
@@ -632,6 +797,34 @@ class CZMatchData
             mod.UndeployAllPlayers(); // undeploy all players for the next round
             await this.preRound(); // prepare for the next round
         }
+    }
+
+    // called when a player is eliminated (killed) during an active round
+    OnElimination(eventPlayer: mod.Player): void
+    {
+        let victimTeam = mod.GetTeam(eventPlayer);
+        let victimTeamID = mod.GetObjId(victimTeam);
+        let victimTeamAlivePlayers = this.getAlivePlayers(victimTeam); // update alive players for the team
+
+        let otherTeamID = victimTeamID === 1 ? 2 : 1;
+        let otherTeam = mod.GetTeam(otherTeamID);
+        let otherTeamAlivePlayers = this.getAlivePlayers(otherTeam);
+
+        let team1Alive = otherTeamID === 1 ? otherTeamAlivePlayers.length : victimTeamAlivePlayers.length;
+        let team2Alive = otherTeamID === 1 ? victimTeamAlivePlayers.length : otherTeamAlivePlayers.length;
+        
+        /* check for team elimination - only end round if ALL players on a team are dead */
+        let winner: number | null = null;
+        if (team1Alive > 0 && team2Alive === 0)
+            winner = 1; // team 1 wins
+        else if (team2Alive > 0 && team1Alive === 0)
+            winner = 2; // team 2 wins
+
+        console.log(`[+] SEALS Alive: ${team1Alive} | MERCS Alive: ${team2Alive}`);
+        if (winner === null)
+            return; // no winner yet , round continues
+
+        this.endRound(winner);
     }
 
     setupPlayers(): void
@@ -644,7 +837,6 @@ class CZMatchData
 
             seal.Respawn();
         }
-        mod.SetCameraTypeForAll(mod.Cameras.ThirdPerson); // set all players to third person camera
     }
 
     getAlivePlayers(team: mod.Team): mod.Player[]
@@ -682,6 +874,12 @@ class CZMatchData
     getTeamName(team: number): string
     {
         return team === 0 ? "SEALS" : "MERCS";
+    }
+
+    // returns true if the game is in an active gameplay state excluding pre-round and waiting for players
+    isGamePlayActive(): boolean
+    {
+        return this.state === GameState.RoundActive || this.state === GameState.RoundEnd || this.state === GameState.MatchEnd;
     }
 }
 
