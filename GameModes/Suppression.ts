@@ -585,7 +585,7 @@ class CZMatchData
         mod.DisplayNotificationMessage(mod.Message("Final Score: {} - {}", this.scores[0], this.scores[1]));
         this.state = GameState.MatchEnd;
 
-        await mod.Wait(20); // wait 20 seconds before resetting the match
+        await mod.Wait(15); // wait 15 seconds before resetting the match
 
         let host = this.getHostPlayer();
         if (host)
@@ -618,7 +618,7 @@ class CZMatchData
         if (winner)
         {
             this.scores[winner - 1]++;
-            mod.DisplayNotificationMessage(mod.Message("Round {} ended - {} win", this.roundNum, this.getTeamName(winner)));
+            mod.DisplayNotificationMessage(mod.Message("{} win", this.getTeamName(winner - 1)));
         }
         else
             mod.DisplayNotificationMessage(mod.Message("Round {} ended in a draw", this.roundNum));
@@ -628,6 +628,7 @@ class CZMatchData
             await this.endMatch();
         else
         {
+            await mod.Wait(5); // wait a few seconds before redeploying players
             mod.UndeployAllPlayers(); // undeploy all players for the next round
             await this.preRound(); // prepare for the next round
         }
