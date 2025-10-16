@@ -92,15 +92,14 @@ export function OnPlayerDeployed(eventPlayer: mod.Player): void
     /* set camera type to 3rd person */
     if (!seal.isAI)
     {
+        mod.SetCameraTypeForPlayer(eventPlayer, mod.Cameras.FirstPerson); // set to first person
+        mod.Wait(1); // wait 1 frame
         mod.SetCameraTypeForPlayer(eventPlayer, mod.Cameras.ThirdPerson); // set to third person
     }
 }
 
 // This will trigger when the Player dies and returns to the deploy screen.
-export function OnPlayerUndeploy(eventPlayer: mod.Player): void 
-{ 
-    mod.SetCameraTypeForPlayer(eventPlayer, mod.Cameras.FirstPerson); // restore first person camera to prevent camera issues on redeploy
-}
+export function OnPlayerUndeploy(eventPlayer: mod.Player): void { }
 
 // Triggered on player death/kill, returns dying player, the killer, etc. Useful for updating scores, updating progression, handling any death/kill related logic.
 export function OnPlayerDied( eventPlayer: mod.Player,  eventOtherPlayer: mod.Player,  eventDeathType: mod.DeathType,  eventWeaponUnlock: mod.WeaponUnlock ): void 
@@ -148,7 +147,7 @@ export function OnPlayerDied( eventPlayer: mod.Player,  eventOtherPlayer: mod.Pl
     else if (team2Alive > 0 && team1Alive === 0)
         winner = 2; // team 2 wins
     
-    log.info(mod.Message("- SEALS Alive: {} | MERCS Alive: {}", team1Alive, team2Alive));
+    log.info(mod.Message("[+] SEALS Alive: {} | MERCS Alive: {}", team1Alive, team2Alive));
     if (winner === null)
         return; // no winner yet , round continues
 
@@ -175,7 +174,7 @@ export function OnPlayerEarnedKill( eventPlayer: mod.Player, eventOtherPlayer: m
     if (killerSeal === victimSeal)
     {
         console.log(`Player ${killerSeal.playerID} killed themselves`);
-        log.warning(mod.Message("Player {} killed themselves", killerSeal.playerID));
+        log.info(mod.Message("[!] Player {} killed themselves", killerSeal.playerID));
         return;
     }
 
@@ -186,14 +185,14 @@ export function OnPlayerEarnedKill( eventPlayer: mod.Player, eventOtherPlayer: m
         killerSeal.stats.friendlyFireKills++; // increment friendly fire kills count
         victimSeal.stats.friendlyFireDeaths++; // increment friendly fire deaths count
         console.log(`Player ${killerSeal.playerID} killed friendly Player ${victimSeal.playerID}`);
-        log.warning(mod.Message("Player {} killed friendly Player {}", killerSeal.playerID, victimSeal.playerID));
+        log.info(mod.Message("[~] Player {} killed friendly Player {}", killerSeal.playerID, victimSeal.playerID));
 
         /* HANDLE EXCESSIVE FRIENDLY FIRE */
         if (killerSeal.stats.friendlyFireKills >= 2)
         {
             mod.Kill(killerSeal.player); // kill the killer for excessive friendly fire
             console.log(`Player ${killerSeal.playerID} killed for excessive friendly fire`);
-            log.error(mod.Message("Player {} killed for excessive friendly fire", killerSeal.playerID));
+            log.info(mod.Message("[!] Player {} killed for excessive friendly fire", killerSeal.playerID));
         }
 
         return;
@@ -204,7 +203,7 @@ export function OnPlayerEarnedKill( eventPlayer: mod.Player, eventOtherPlayer: m
         killerSeal.stats.headshotKills++;
 
     console.log(`Player ${killerSeal.playerID} killed Player ${victimSeal.playerID}`);
-    log.info(mod.Message("Player {} killed Player {}", killerSeal.playerID, victimSeal.playerID));
+    log.info(mod.Message("[+] Player {} killed Player {}", killerSeal.playerID, victimSeal.playerID));
 }
 
 // Triggered when a player is damaged, returns same variables as OnPlayerDied. Useful for custom on damage logic and updating custom UI.
