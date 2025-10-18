@@ -99,6 +99,14 @@ export function OnPlayerDied( eventPlayer: mod.Player,  eventOtherPlayer: mod.Pl
 }
 
 export function OnPlayerEarnedKill( eventPlayer: mod.Player, eventOtherPlayer: mod.Player, eventDeathType: mod.DeathType, eventWeaponUnlock: mod.WeaponUnlock ): void { }
+export function OnPlayerEarnedAssist( eventPlayer: mod.Player, eventOtherPlayer: mod.Player, eventDeathType: mod.DeathType, eventWeaponUnlock: mod.WeaponUnlock ): void 
+{ 
+    let shooter = CZSeal.get(eventPlayer);
+    if (!shooter)
+        return;
+
+    shooter.OnEarnedAssist(eventOtherPlayer, eventDeathType);
+}
 
 // Triggered when a player is damaged, returns same variables as OnPlayerDied. Useful for custom on damage logic and updating custom UI.
 export function OnPlayerDamaged(
@@ -201,6 +209,7 @@ export enum SoldierCameraView
 class CZSealStats
 {
     kills: number[] = [0, 0]; // number of kills
+    assists: number[] = [0, 0]; // number of assists
     deaths: number[] = [0, 0]; // number of times died
     headshots: number[] = [0, 0]; // number of headshots
     headshotKills: number[] = [0, 0]; // number of headshot kills
@@ -216,6 +225,8 @@ class CZSealStats
     {
         this.kills[1] += this.kills[0];
         this.kills[0] = 0; // reset round stats
+        this.assists[1] += this.assists[0];
+        this.assists[0] = 0; // reset round stats
         this.deaths[1] += this.deaths[0];
         this.deaths[0] = 0; // reset round stats
         this.headshots[1] += this.headshots[0];
@@ -239,6 +250,7 @@ class CZSealStats
     reset(): void
     {
         this.kills = [0, 0];
+        this.assists = [0, 0];
         this.deaths = [0, 0];
         this.headshots = [0, 0];
         this.headshotKills = [0, 0];
@@ -257,6 +269,7 @@ class CZSeal
     playerID: number;
     teamID: number;
     isAI: boolean;
+    name: mod.Message;
     hasSpawned: boolean = false;
     isAlive: boolean = false;
     maxHealth = 100; // AI get 200 health , players get 100
@@ -279,6 +292,7 @@ class CZSeal
         this.playerID = mod.GetObjId(player);
         this.teamID = mod.GetObjId(mod.GetTeam(player)); // teamID should be 1 or 2
         this.isAI = mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier);
+        this.name = this.getPlayerName();
         CZSeal.sealObjects.push(player);
     }
 
@@ -296,7 +310,7 @@ class CZSeal
             {
                 seal = new CZSeal(player);
                 CZSeal.#allSealPlayers[playerID] = seal;
-                console.log(`Created CZSeal for Player ID: ${playerID} | TeamID: ${seal.teamID} | isAI: ${seal.isAI}`);
+                console.log(`Created CZSeal for Player ID: ${playerID} | TeamID: ${seal.teamID} | isAI: ${seal.isAI} | Name: ${seal.name.toString()}`);
             }
 
             return seal;
@@ -352,6 +366,21 @@ class CZSeal
         mod.SetCameraTypeForPlayer(this.player, this.isZooming ? mod.Cameras.FirstPerson : mod.Cameras.ThirdPerson, currentShoulder);
     }
 
+    /* triggered when the player earns an assist */
+    OnEarnedAssist(eventOtherPlayer: mod.Player, eventDeathType: mod.DeathType): void
+    {
+        if (!this.isAlive)
+            return;
+
+        let victim = CZSeal.get(eventOtherPlayer);
+        if (!victim)
+            return;
+
+        this.stats.assists[0]++;
+        console.log(`Player ${this.playerID} earned an assist on Player ${victim.playerID}`);
+        // mod.DisplayHighlightedWorldLogMessage(mod.Message("elimination assist"), this.player);
+    }
+
     /* triggered when the player is damaged */
     OnPlayerDamaged(eventDamageType: mod.DamageType, eventOtherPlayer: mod.Player): void
     {
@@ -400,6 +429,7 @@ class CZSeal
 
         // log damage info
         console.log(`Player ${shooter.playerID} damaged Player ${this.playerID} for ${damageReceived.toFixed(1)} damage`);
+        // mod.DisplayHighlightedWorldLogMessage(mod.Message("{}", damageReceived.toFixed(1)), shooter.player);
     }
 
     /* triggered when the player dies */
@@ -423,7 +453,7 @@ class CZSeal
         if (killerSeal === this)
         {
             console.log(`Player ${killerSeal.playerID} killed themselves`);
-            //  log.info(mod.Message("[!] Player {} killed themselves", killerSeal.playerID));
+            log.info(mod.Message("{} killed themselves", killerSeal.player));
             return;
         }
 
@@ -434,14 +464,14 @@ class CZSeal
             killerSeal.stats.friendlyFireKills[0]++; // increment friendly fire kills count
             this.stats.friendlyFireDeaths[0]++; // increment friendly fire deaths count
             console.log(`Player ${killerSeal.playerID} killed friendly Player ${this.playerID}`);
-            //  log.info(mod.Message("[~] Player {} killed friendly Player {}", killerSeal.playerID, this.playerID));
+            log.info(mod.Message("{} killed friendly Player {}", killerSeal.player, this.player));
 
             /* HANDLE EXCESSIVE FRIENDLY FIRE */
             if (killerSeal.stats.friendlyFireKills[0] >= 2)
             {
                 mod.Kill(killerSeal.player); // kill the killer for excessive friendly fire
                 console.log(`Player ${killerSeal.playerID} killed for excessive friendly fire`);
-                //  log.info(mod.Message("[!] Player {} killed for excessive friendly fire", killerSeal.playerID));
+                log.info(mod.Message("{} killed for excessive friendly fire", killerSeal.player));
             }
 
             return;
@@ -452,7 +482,8 @@ class CZSeal
             killerSeal.stats.headshotKills[0]++;
 
         console.log(`Player ${killerSeal.playerID} killed Player ${this.playerID}`);
-        //  log.info(mod.Message("[+] Player {} killed Player {}", killerSeal.playerID, this.playerID));
+        log.info(mod.Message("{} eliminated {}", killerSeal.player, this.player));
+        // mod.DisplayHighlightedWorldLogMessage(mod.Message("elimination"), killerSeal.player);
     }
 
     /* removes all equipment from the player */
@@ -482,9 +513,9 @@ class CZSeal
         return mod.GetSoldierState(this.player, mod.SoldierStateBool.IsAlive);
     }
     
-    getPlayerName(): string
+    getPlayerName(): mod.Message
     {
-        return mod.Message("getPlayerName", this.player).toString();
+        return mod.Message("getPlayerName", this.player);
     }
 
     /* returns health percent (0-100) */
@@ -644,7 +675,6 @@ class CZMatchData
 
         // log seal stats
         console.log(`SEALS Rounds Won: ${this.scores[0]}`);
-        log.info(mod.Message("SEALS Rounds Won: {}", this.scores[0]));
         for (let player of CZSeal.sealObjects)
         {
             let seal = CZSeal.get(player);
@@ -654,12 +684,12 @@ class CZMatchData
             if (seal.teamID !== 1)
                 continue; // only log team 1 (SEALS) stats for now
             console.log(`Player [${seal.playerID}] Stats: Kills: ${seal.stats.kills[1]}, Deaths: ${seal.stats.deaths[1]}, Headshots: ${seal.stats.headshots[1]}, Headhshot Kills: ${seal.stats.headshotKills[1]}, Shots on Friendly: ${seal.stats.shotsOnFriendly[1]}, Friendly Fire Kills: ${seal.stats.friendlyFireKills[1]}`);
-            log.info(mod.Message("- Player [${}] Stats: Kills: {}, Deaths: {}", seal.playerID, seal.stats.kills[1], seal.stats.deaths[1]));
+            log.info(mod.Message("- {} Stats: Kills: {}, Deaths: {}", seal.player, seal.stats.kills[1], seal.stats.deaths[1]));
             seal.stats.reset(); // reset all stats
         }
+        log.info(mod.Message("SEALS Rounds Won: {}", this.scores[0]));
 
         console.log(`MERCS Rounds Won: ${this.scores[1]}`);
-        log.info(mod.Message("MERCS Rounds Won: {}", this.scores[1]));
         for (let player of CZSeal.sealObjects)
         {
             let seal = CZSeal.get(player);
@@ -668,9 +698,10 @@ class CZMatchData
             if (seal.teamID !== 2)
                 continue; // only log team 2 (MERCS) stats for now
             console.log(`Player [${seal.playerID}] Stats: Kills: ${seal.stats.kills[1]}, Deaths: ${seal.stats.deaths[1]}, Headshots: ${seal.stats.headshots[1]}, Headhshot Kills: ${seal.stats.headshotKills[1]}, Shots on Friendly: ${seal.stats.shotsOnFriendly[1]}, Friendly Fire Kills: ${seal.stats.friendlyFireKills[1]}`);
-            log.info(mod.Message("- Player [${}] Stats: Kills: {}, Deaths: {}", seal.playerID, seal.stats.kills[1], seal.stats.deaths[1]));
+            log.info(mod.Message("- {} Stats: Kills: {}, Deaths: {}", seal.player, seal.stats.kills[1], seal.stats.deaths[1]));
             seal.stats.reset(); // reset all stats
         }
+        log.info(mod.Message("MERCS Rounds Won: {}", this.scores[1]));
 
         await mod.Wait(15); // wait 15 seconds before resetting the match
 
@@ -732,7 +763,7 @@ class CZMatchData
         if (winner)
         {
             this.scores[winner - 1]++;
-            log.info(mod.Message("Team {} wins Round {}", this.getTeamName(winner - 1), this.roundNum));
+            log.info(mod.Message("{} win round {}", this.getTeamName(winner - 1), this.roundNum));
             mod.DisplayNotificationMessage(mod.Message("{} win", this.getTeamName(winner - 1)));
         }
         else
@@ -793,6 +824,8 @@ class CZMatchData
         if (seal.isAI)
             this.bots++;
 
+        console.log(`Player ${seal.playerID} joined the game`);
+        
         // check if the match is in progress
         if (this.state !== GameState.WaitingForPlayers)
         {
@@ -804,7 +837,7 @@ class CZMatchData
             console.log(`Player ${seal.playerID} joined during active match , set as dead`);
             return;
         }
-        console.log(`Player ${seal.playerID} joined the game`);
+        log.info(mod.Message("{} joined the game", seal.player));
     }
 
     /* triggered when a player leaves the game */
@@ -819,6 +852,7 @@ class CZMatchData
 
         /* log event */
         console.log(`Player Left: ID: ${seal.playerID} | TeamID: ${seal.teamID}`);
+        log.info(mod.Message("{} left the game", seal.player));
 
         /* remove player */
         CZSeal.remove(eventNumber);
@@ -901,8 +935,6 @@ class CZMatchData
         else if (team2Alive > 0 && team1Alive === 0)
             winner = 2; // team 2 wins
 
-        console.log(`[+] SEALS Alive: ${team1Alive} | MERCS Alive: ${team2Alive}`);
-        log.info(mod.Message("SEALS Alive: {} | MERCS Alive: {}", team1Alive, team2Alive));
         if (winner === null)
             return; // no winner yet , round continues
 
