@@ -32,7 +32,6 @@
 export function OnPlayerJoinGame(eventPlayer: mod.Player): void 
 {
     /* @TODO: handle join in progress events */
-        
     mod.SetRedeployTime(eventPlayer, 0); // instantly redeploy on death
 
     /* get match data instance */
