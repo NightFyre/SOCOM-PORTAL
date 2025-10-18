@@ -24,6 +24,8 @@
     - repeat until one team wins the majority of rounds
 
 */
+// import * as modlib from 'modlib'; // required on server side
+import * as modlib from '../PortalSDK/code/modlib'; // for local testing
 
 
 ////////////////////////////////// PLAYER EVENTS ///////////////////////////////////////
@@ -31,92 +33,46 @@
 // Triggered when player joins the game. Useful for pregame setup, team management, etc.
 export function OnPlayerJoinGame(eventPlayer: mod.Player): void 
 {
-    /* @TODO: handle join in progress events */
-    mod.SetRedeployTime(eventPlayer, 0); // instantly redeploy on death
-
-    /* get match data instance */
     let matchData = CZMatchData.get();
     if (!matchData)
-        return; // invalid match data object
+        return;
 
-    /* get seal instance */
-    let seal = CZSeal.get(eventPlayer);
-    if (!seal)
-        return; // invalid seal object
-    
-    /* add player to match data */
-    matchData.currentPlayers++;
-
-    /* add bot count if AI */
-    if (seal.isAI)
-        matchData.bots++;
+    return matchData.OnPlayerJoined(eventPlayer);
 }
 
 // Triggered when player leaves the game. Useful for clean up logic, team management, etc.
 export function OnPlayerLeaveGame(eventNumber: number): void 
 {
-    /* eventNumber is playerID */
-    let seal = CZSeal.getPlayerByID(eventNumber);
-    if (!seal)
-        return; // invalid seal object
-    
     let matchData = CZMatchData.get();
-    if (matchData)
-    {
-        matchData.currentPlayers--;
-        matchData.bots -= seal.isAI ? 1 : 0;
-    }
+    if (!matchData)
+        return;
 
-    /* log event */
-    console.log(`Player Left: ID: ${seal.playerID} | TeamID: ${seal.teamID}`);
-
-    /* remove player */
-    CZSeal.remove(eventNumber);
+    matchData.OnPlayerLeft(eventNumber);
 }
 
 // Triggered when player selects their class and deploys into game. Useful for any spawn/start logic.
 export function OnPlayerDeployed(eventPlayer: mod.Player): void 
 {
-    /* get seal instance */
-    let seal = CZSeal.get(eventPlayer);
-    if (!seal)
-        return; // invalid seal object
+    let matchData = CZMatchData.get();
+    if (!matchData)
+        return;
 
-    if (seal.hasSpawned)
-    {
-        if (seal.isAI)
-            seal.setAIBehavior(false);
-
-        seal.Disarm(); // disarm the player to prevent exploits
-        return; // already spawned
-    }
-
-    /* set seal state */
-    seal.hasSpawned = true;
-    seal.isAlive = true;
-
-    /* set camera type to 3rd person */
-    if (!seal.isAI)
-    {
-        /* hack for fixing under map camera */
-        mod.SetCameraTypeForPlayer(eventPlayer, mod.Cameras.FirstPerson); // set to first person
-        mod.Wait(1); // wait 1 frame
-        mod.SetCameraTypeForPlayer(eventPlayer, mod.Cameras.ThirdPerson); // set to third person
-    }
-
-    console.log(`Player ${seal.playerID} deployed | isAI: ${seal.isAI}`);
+    matchData.OnPlayerSpawned(eventPlayer);
 }
 
 // This will trigger when the Player dies and returns to the deploy screen.
-export function OnPlayerUndeploy(eventPlayer: mod.Player): void { }
+export function OnPlayerUndeploy(eventPlayer: mod.Player): void 
+{ 
+    let matchData = CZMatchData.get();
+    if (!matchData)
+        return;
+
+    matchData.OnPlayerReturnedToDeployScreen(eventPlayer);
+}
 
 // Triggered on player death/kill, returns dying player, the killer, etc. Useful for updating scores, updating progression, handling any death/kill related logic.
 export function OnPlayerDied( eventPlayer: mod.Player,  eventOtherPlayer: mod.Player,  eventDeathType: mod.DeathType,  eventWeaponUnlock: mod.WeaponUnlock ): void 
 {
-    /* ignore redeploy deaths */
-    if (mod.EventDeathTypeCompare(eventDeathType, mod.PlayerDeathTypes.Redeploy))
-        return;
-
     /* get match data instance , only update if round is active */
     let matchData = CZMatchData.get();
     if (!matchData || matchData.state !== GameState.RoundActive)
@@ -124,12 +80,22 @@ export function OnPlayerDied( eventPlayer: mod.Player,  eventOtherPlayer: mod.Pl
 
     /* get seal victim instance */
     let victim = CZSeal.get(eventPlayer);
-    if (!victim || !victim.isAlive) // player already dead , ignore
+    if (!victim)
+        return;
+
+    if (!victim.isAlive) // player already dead , ignore
+    {
+        victim.isArmed = true; // prevent the player from deplying with a weapon
+        return;
+    }
+
+    /* ignore redeploy deaths */
+    if (mod.EventDeathTypeCompare(eventDeathType, mod.PlayerDeathTypes.Redeploy))
         return;
 
     victim.OnPlayerDied(eventDeathType, eventOtherPlayer);
 
-    matchData.OnElimination(eventPlayer);
+    matchData.OnPlayerEliminated(eventPlayer);
 }
 
 export function OnPlayerEarnedKill( eventPlayer: mod.Player, eventOtherPlayer: mod.Player, eventDeathType: mod.DeathType, eventWeaponUnlock: mod.WeaponUnlock ): void { }
@@ -161,10 +127,8 @@ export async function OnGameModeStarted()
 {
     log.info(mod.Message("SOCOM PORTAL - Suppression Game Mode Started"));
 
-    /* override spawn mode - deploy */
-    //  mod.EnableAllPlayerDeploy(false);
-    //  mod.SetSpawnMode(mod.SpawnModes.Deploy);
-    mod.SetSpawnMode(mod.SpawnModes.AutoSpawn);
+    /* Initialize UI widgets */
+    UI.initializeWidgets();
 
     /* create match data instance */
     let matchData = CZMatchData.get();
@@ -210,11 +174,14 @@ export function OngoingGlobal(): void
     if (!matchData)
         return; // invalid match data object
 
+    // Update score widget UI
+    UI.updateScoreWidget();
+
     // Check all players for camera updates (runs every frame)
     for (let player of CZSeal.sealObjects)
     {
         let seal = CZSeal.get(player);
-        if (!seal)
+        if (!seal || !seal.isValid())
             continue;
 
         /* update camera state */
@@ -292,7 +259,7 @@ class CZSeal
     isAI: boolean;
     hasSpawned: boolean = false;
     isAlive: boolean = false;
-    maxHealth = 100;
+    maxHealth = 100; // AI get 200 health , players get 100
     currentHealth = 100;
     isZooming: boolean = false;
     isArmed: boolean = true;
@@ -366,12 +333,9 @@ class CZSeal
     }
 
     /* call in game update to update camera state */
-    static debugTPSCameraIndex = 0;
-    static debugFPSCameraIndex = 0;
     CameraUpdate(): void
     {
-        /* verify valid state */
-        if (!this.hasSpawned || this.isAI || !this.isAlive)
+        if (this.isAI)
             return;
 
         let currentShoulder = this.cameraView === SoldierCameraView.RightShoulder ? 0 : 1;
@@ -441,7 +405,7 @@ class CZSeal
     /* triggered when the player dies */
     OnPlayerDied(eventDeathType: mod.DeathType, eventOtherPlayer: mod.Player | undefined): void
     {
-        mod.SetCameraTypeForPlayer(this.player, mod.Cameras.Free); // set death camera
+        //  mod.SetCameraTypeForPlayer(this.player, mod.Cameras.Free); // set death camera
 
         if (!this.isAlive)
             return;
@@ -491,18 +455,6 @@ class CZSeal
         //  log.info(mod.Message("[+] Player {} killed Player {}", killerSeal.playerID, this.playerID));
     }
 
-    /* called on each new round , resets state members */
-    Respawn(): void
-    {
-        this.hasSpawned = false;
-        this.currentHealth = this.maxHealth;
-        this.isZooming = false;
-        this.isArmed = true;
-        mod.DeployPlayer(this.player); // deploy the player
-        mod.SetCameraTypeForPlayer(this.player, mod.Cameras.ThirdPerson, this.cameraView === SoldierCameraView.RightShoulder ? 0 : 1);
-        this.setAIBehavior(true); // restore AI behavior
-    }
-
     /* removes all equipment from the player */
     Disarm(): void
     {
@@ -524,12 +476,24 @@ class CZSeal
 
     /* UTILITY METHODS */
 
+    /* checks if the player is alive */
+    isValid(): boolean
+    {
+        return mod.GetSoldierState(this.player, mod.SoldierStateBool.IsAlive);
+    }
+    
+    getPlayerName(): string
+    {
+        return mod.Message("getPlayerName", this.player).toString();
+    }
+
     /* returns health percent (0-100) */
     getHealthPercent() : number
     {
-        let currentHealth = mod.GetSoldierState(this.player, mod.SoldierStateNumber.CurrentHealth);
-        let maxHealth = mod.GetSoldierState(this.player, mod.SoldierStateNumber.MaxHealth);
-        return (currentHealth / maxHealth) * 100;
+        return (this.currentHealth / this.maxHealth) * 100;
+        //  let currentHealth = mod.GetSoldierState(this.player, mod.SoldierStateNumber.CurrentHealth);
+        //  let maxHealth = mod.GetSoldierState(this.player, mod.SoldierStateNumber.MaxHealth);
+        //  return (currentHealth / maxHealth) * 100;
     }
 
     /* returns yaw angle in radians */
@@ -632,14 +596,9 @@ class CZMatchData
                     await this.startMatch();
                 }
                 break;
-            case GameState.PreRound: 
-                this.startRound(); // start a new round
-                break;
             case GameState.RoundActive:
                 this.updateRound();
                 break;
-            case GameState.RoundEnd: break;
-            case GameState.MatchEnd: break;
             default: break;
         }
 
@@ -665,13 +624,17 @@ class CZMatchData
         if (this.state !== GameState.WaitingForPlayers)
             return; // only start match if waiting for players
 
+        mod.DeployAllPlayers(); // deploy all players for a warm up period
+        mod.DisplayNotificationMessage(mod.Message("Match starting in 15 seconds..."));
+        await mod.Wait(15); // wait 15 seconds before starting the match
+
         this.roundNum = 0;
         this.scores = [0, 0];
         this.matchTime = 0;
 
         console.log("Starting Match");
 
-        this.preRound(); // start the first round immediately
+        await this.preRound(); // start the first round immediately
     }
 
     async endMatch(): Promise<void>
@@ -681,6 +644,7 @@ class CZMatchData
 
         // log seal stats
         console.log(`SEALS Rounds Won: ${this.scores[0]}`);
+        log.info(mod.Message("SEALS Rounds Won: {}", this.scores[0]));
         for (let player of CZSeal.sealObjects)
         {
             let seal = CZSeal.get(player);
@@ -690,10 +654,12 @@ class CZMatchData
             if (seal.teamID !== 1)
                 continue; // only log team 1 (SEALS) stats for now
             console.log(`Player [${seal.playerID}] Stats: Kills: ${seal.stats.kills[1]}, Deaths: ${seal.stats.deaths[1]}, Headshots: ${seal.stats.headshots[1]}, Headhshot Kills: ${seal.stats.headshotKills[1]}, Shots on Friendly: ${seal.stats.shotsOnFriendly[1]}, Friendly Fire Kills: ${seal.stats.friendlyFireKills[1]}`);
+            log.info(mod.Message("- Player [${}] Stats: Kills: {}, Deaths: {}", seal.playerID, seal.stats.kills[1], seal.stats.deaths[1]));
             seal.stats.reset(); // reset all stats
         }
 
         console.log(`MERCS Rounds Won: ${this.scores[1]}`);
+        log.info(mod.Message("MERCS Rounds Won: {}", this.scores[1]));
         for (let player of CZSeal.sealObjects)
         {
             let seal = CZSeal.get(player);
@@ -702,6 +668,7 @@ class CZMatchData
             if (seal.teamID !== 2)
                 continue; // only log team 2 (MERCS) stats for now
             console.log(`Player [${seal.playerID}] Stats: Kills: ${seal.stats.kills[1]}, Deaths: ${seal.stats.deaths[1]}, Headshots: ${seal.stats.headshots[1]}, Headhshot Kills: ${seal.stats.headshotKills[1]}, Shots on Friendly: ${seal.stats.shotsOnFriendly[1]}, Friendly Fire Kills: ${seal.stats.friendlyFireKills[1]}`);
+            log.info(mod.Message("- Player [${}] Stats: Kills: {}, Deaths: {}", seal.playerID, seal.stats.kills[1], seal.stats.deaths[1]));
             seal.stats.reset(); // reset all stats
         }
 
@@ -712,11 +679,37 @@ class CZMatchData
             mod.EndGameMode(host);
     }
 
-    preRound(): void
+    async preRound(): Promise<void>
     {
-        this.setupPlayers(); // respawn all players for the new round
-
         this.state = GameState.PreRound; // transition to pre-round state
+
+        mod.SetSpawnMode(mod.SpawnModes.AutoSpawn); // force auto spawn
+        mod.EnableAllPlayerDeploy(true); // enable deploy for all players
+        mod.UndeployAllPlayers(); // undeploy all players for the next round
+        await mod.Wait(3); // wait a few seconds for the game to do its undeploy logic
+        
+        /* respawn all players one at a time */
+        for (let player of CZSeal.sealObjects)
+        {
+            let seal = CZSeal.get(player);
+            if (!seal)
+                continue;
+            
+            seal.hasSpawned = false;
+            seal.currentHealth = seal.maxHealth;
+            seal.isZooming = false;
+            seal.isArmed = true;
+
+            mod.DeployPlayer(seal.player); // deploy the player
+            
+            if (seal.isAI)
+                seal.setAIBehavior(true); // set ai to battlefield behavior
+        }
+
+        mod.SetSpawnMode(mod.SpawnModes.Deploy); // restore normal spawn mode
+
+        
+        this.startRound(); // start a new round
         
         console.log(`Preparing for Round ${this.roundNum + 1}`);
     }
@@ -727,6 +720,7 @@ class CZMatchData
         this.roundTime = this.roundTimeMax;
 
         this.state = GameState.RoundActive;
+        mod.EnableAllPlayerDeploy(false); // disable redeployment for all players
         mod.DisplayNotificationMessage(mod.Message("Round {} of {} started", this.roundNum, this.roundMax));
     }
 
@@ -738,6 +732,7 @@ class CZMatchData
         if (winner)
         {
             this.scores[winner - 1]++;
+            log.info(mod.Message("Team {} wins Round {}", this.getTeamName(winner - 1), this.roundNum));
             mod.DisplayNotificationMessage(mod.Message("{} win", this.getTeamName(winner - 1)));
         }
         else
@@ -778,14 +773,116 @@ class CZMatchData
         else
         {
             await mod.Wait(7); // wait a few seconds before redeploying players ( notification is 6 seconds )
-            mod.UndeployAllPlayers(); // undeploy all players for the next round
-            this.preRound(); // prepare for the next round
+            await this.preRound(); // prepare for the next round
         }
     }
 
-    // called when a player is eliminated (killed) during an active round
-    OnElimination(eventPlayer: mod.Player): void
+    /* triggered when a player joins the game */
+    OnPlayerJoined(eventPlayer: mod.Player): void
     {
+        let seal = CZSeal.get(eventPlayer);
+        if (!seal)
+            return; // invalid seal object
+
+        mod.SetRedeployTime(eventPlayer, 0.0); // disable redeploy timer
+        
+        /* add player to match data */
+        this.currentPlayers++;
+
+        /* add bot count if AI */
+        if (seal.isAI)
+            this.bots++;
+
+        // check if the match is in progress
+        if (this.state !== GameState.WaitingForPlayers)
+        {
+            // match is currently in progress , auto spawn should be disabled , set player as dead to prevent any possible bugs & disable their ability to redeploy
+            // hopefully everything else is handled on the start of the new round.
+            seal.isAlive = false; // set player as dead
+            seal.isArmed = true; // set flag so player is disarmed if a deployment happens to occur
+            mod.EnablePlayerDeploy(eventPlayer, false); // disable redeploy / respawn
+            console.log(`Player ${seal.playerID} joined during active match , set as dead`);
+            return;
+        }
+        console.log(`Player ${seal.playerID} joined the game`);
+    }
+
+    /* triggered when a player leaves the game */
+    OnPlayerLeft(eventNumber: number): void
+    {
+        let seal = CZSeal.getPlayerByID(eventNumber);
+        if (!seal)
+            return; // invalid seal object
+        
+        this.currentPlayers--;
+        this.bots -= seal.isAI ? 1 : 0;
+
+        /* log event */
+        console.log(`Player Left: ID: ${seal.playerID} | TeamID: ${seal.teamID}`);
+
+        /* remove player */
+        CZSeal.remove(eventNumber);
+    }
+
+    /* trigged when a player deploys */
+    OnPlayerSpawned(eventPlayer: mod.Player): void
+    {
+        /* players are only ever "deployed" via preRound() method , just before GameState.PreRound*/ 
+        if (this.state !== GameState.PreRound)
+            return; // ignore spawns while waiting for players
+
+        let seal = CZSeal.get(eventPlayer);
+        if (!seal)
+            return;
+
+        /* seal already spawned for this round */
+        if (seal.hasSpawned)
+        {
+            if (seal.isAI)
+                seal.setAIBehavior(false);
+
+            seal.Disarm(); // disarm the player to prevent exploits
+            return; // already spawned
+        }
+
+        /* new round spawn , set player state */
+
+        /* set seal state */
+        seal.hasSpawned = true;
+        seal.isAlive = true;
+
+        /* set camera type to 3rd person */
+        if (!seal.isAI)
+        {
+            /* hack for fixing under map camera */
+            mod.SetCameraTypeForPlayer(eventPlayer, mod.Cameras.FirstPerson); // set to first person
+            mod.Wait(1); // wait 1 frame
+            mod.SetCameraTypeForPlayer(seal.player, mod.Cameras.ThirdPerson, seal.cameraView === SoldierCameraView.RightShoulder ? 0 : 1);
+        }
+        else
+            seal.setAIBehavior(true);
+
+        console.log(`Player ${seal.playerID} spawned for team ${seal.teamID} | isAI: ${seal.isAI}`);
+    }
+
+    OnPlayerReturnedToDeployScreen(eventPlayer: mod.Player): void
+    {
+
+    }
+
+    OnPlayerDamaged(eventPlayer: mod.Player, eventDamageType: mod.DamageType, eventOtherPlayer: mod.Player): void
+    {
+
+    }    
+
+    // called when a player is eliminated (killed) during an active round
+    OnPlayerEliminated(eventPlayer: mod.Player): void
+    {
+        /*
+            check for round end / victory conditions
+            a team wins when all players on the opposing team are eliminated
+        */
+
         let victimTeam = mod.GetTeam(eventPlayer);
         let victimTeamID = mod.GetObjId(victimTeam);
         let victimTeamAlivePlayers = this.getAlivePlayers(victimTeam); // update alive players for the team
@@ -810,18 +907,6 @@ class CZMatchData
             return; // no winner yet , round continues
 
         this.endRound(winner);
-    }
-
-    setupPlayers(): void
-    {
-        for (let player of CZSeal.sealObjects)
-        {
-            let seal = CZSeal.get(player);
-            if (!seal)
-                continue;
-
-            seal.Respawn();
-        }
     }
 
     getAlivePlayers(team: mod.Team): mod.Player[]
@@ -861,10 +946,10 @@ class CZMatchData
         return team === 0 ? "SEALS" : "MERCS";
     }
 
-    // returns true if the game is in an active gameplay state excluding pre-round and waiting for players
+    // returns true if the game is in an active gameplay state excluding waiting for players
     isGamePlayActive(): boolean
     {
-        return this.state === GameState.RoundActive || this.state === GameState.RoundEnd || this.state === GameState.MatchEnd;
+        return this.state === GameState.PreRound || this.state === GameState.RoundActive || this.state === GameState.RoundEnd || this.state === GameState.MatchEnd;
     }
 }
 
@@ -1130,9 +1215,9 @@ export namespace Logging {
             0,
             mod.UIBgFill.Solid,
             message,
-            12,
-            textColor,
-            1,
+            16, // text size
+            textColor, // text color
+            1, // text alpha
             mod.UIAnchor.CenterLeft
         );
 
@@ -1140,6 +1225,204 @@ export namespace Logging {
         // Copied from the SDK ParseUI function, seems to be necessary for some reason?
         mod.SetUIWidgetName(widget, '');
         return widget;
+    }
+}
+
+
+// https://staging.d70cu09wjw7ws.amplifyapp.com/
+// https://discord.com/channels/870246147455877181/1428410039080718487
+export namespace UI {
+
+    const widget = modlib.ParseUI(
+    {
+      type: "Container",
+      name: "Container_Round_Info",
+      //    position: [-10, -250],
+      position: [0, 0],
+      size: [220, 100],
+      anchor: mod.UIAnchor.TopCenter,
+      visible: true,
+      textLabel: "",
+      textColor: [1, 1, 1],
+      textAlpha: 0.5,
+      textSize: 24,
+      textAnchor: mod.UIAnchor.Center,
+      padding: 10,
+      bgColor: [0.1, 0.1, 0.1],
+      bgAlpha: 0.8,
+      bgFill: mod.UIBgFill.Blur,
+      imageType: mod.UIImageType.None,
+      imageColor: [1, 1, 1],
+      imageAlpha: 1,
+      buttonEnabled: false,
+      children: [
+        {
+          type: "Text",
+          name: "Text_Score_SealsRemaining",
+          position: [0, 0],
+          size: [90, 50],
+          anchor: mod.UIAnchor.TopLeft,
+          visible: true,
+          textLabel: "SEALs: 0",
+          textColor: [0.2, 0.6, 1],
+          textAlpha: 1,
+          textSize: 18,
+          textAnchor: mod.UIAnchor.Center,
+          padding: 5,
+          bgColor: [0.1, 0.1, 0.1],
+          bgAlpha: 0,
+          bgFill: mod.UIBgFill.Solid,
+          imageType: mod.UIImageType.None,
+          imageColor: [1, 1, 1],
+          imageAlpha: 1,
+          buttonEnabled: false
+        },
+        {
+          type: "Text",
+          name: "Text_Score_MercsRemaining",
+          position: [0, 0],
+          size: [90, 50],
+          anchor: mod.UIAnchor.TopRight,
+          visible: true,
+          textLabel: "MERCs: 0",
+          textColor: [1, 0.3, 0.3],
+          textAlpha: 1,
+          textSize: 18,
+          textAnchor: mod.UIAnchor.Center,
+          padding: 5,
+          bgColor: [0.1, 0.1, 0.1],
+          bgAlpha: 0,
+          bgFill: mod.UIBgFill.Solid,
+          imageType: mod.UIImageType.None,
+          imageColor: [1, 1, 1],
+          imageAlpha: 1,
+          buttonEnabled: false
+        },
+        {
+          type: "Text",
+          name: "Text_Score_RoundTime",
+          position: [0, 0],
+          size: [180, 50],
+          anchor: mod.UIAnchor.BottomCenter,
+          visible: true,
+          textLabel: "4:00",
+          textColor: [1, 1, 1],
+          textAlpha: 1,
+          textSize: 22,
+          textAnchor: mod.UIAnchor.Center,
+          padding: 5,
+          bgColor: [0.1, 0.1, 0.1],
+          bgAlpha: 0,
+          bgFill: mod.UIBgFill.Solid,
+          imageType: mod.UIImageType.None,
+          imageColor: [1, 1, 1],
+          imageAlpha: 1,
+          buttonEnabled: false
+        }
+      ]
+    }
+    );
+
+    // Store widget references for updates
+    let sealsText: mod.UIWidget | undefined;
+    let mercsText: mod.UIWidget | undefined;
+    let timeText: mod.UIWidget | undefined;
+
+    // Initialize widget references
+    export function initializeWidgets(): void {
+        sealsText = mod.FindUIWidgetWithName("Text_Score_SealsRemaining");
+        mercsText = mod.FindUIWidgetWithName("Text_Score_MercsRemaining");
+        timeText = mod.FindUIWidgetWithName("Text_Score_RoundTime");
+    }
+
+    // Update the score widget with current game data
+    export function updateScoreWidget(): void {
+        let matchData = CZMatchData.get();
+        if (!matchData) {
+            return;
+        }
+
+        // Get alive player counts for each team
+        let team1 = mod.GetTeam(1);
+        let team2 = mod.GetTeam(2);
+        let sealsAlive = matchData.getAlivePlayers(team1).length;
+        let mercsAlive = matchData.getAlivePlayers(team2).length;
+
+        // Format time remaining and status based on game state
+        let timeString = "00:00";
+        let showTimeWidget = true;
+
+        switch (matchData.state) {
+            case GameState.WaitingForPlayers:
+                timeString = "Waiting for players...";
+                showTimeWidget = false;
+                break;
+            case GameState.PreRound:
+                timeString = "Preparing...";
+                break;
+            case GameState.RoundEnd:
+                timeString = "Round Over";
+                break;
+            case GameState.MatchEnd:
+                timeString = "Match Over";
+                break;
+            default: break;
+        }
+
+        /* SEALs ALIVE */
+        if (sealsText)
+            mod.SetUITextLabel(sealsText, mod.Message("SEALs: {}", sealsAlive));
+
+        /* MERCs ALIVE */
+        if (mercsText)
+            mod.SetUITextLabel(mercsText, mod.Message("MERCs: {}", mercsAlive));
+
+        /* ROUND TIMER */
+        if (timeText) {
+            if (matchData.state == GameState.RoundActive) {
+                let timeLeft = matchData.roundTime;
+                let minutes = Math.floor(timeLeft / 60);
+                let seconds = timeLeft % 60;
+                if (seconds < 10) {
+                    mod.SetUITextLabel(timeText, mod.Message("{}:0{}", minutes, seconds));
+                } else {
+                    mod.SetUITextLabel(timeText, mod.Message("{}:{}", minutes, seconds));
+                }
+            }
+            else
+                mod.SetUITextLabel(timeText, mod.Message(timeString));
+            
+            // Change color based on time remaining (only during active rounds)
+            if (matchData.state === GameState.RoundActive) {
+                let timeLeft = matchData.roundTime;
+                if (timeLeft <= 30) {
+                    // Red for last 30 seconds
+                    mod.SetUITextColor(timeText, mod.CreateVector(1, 0.2, 0.2));
+                } else if (timeLeft <= 60) {
+                    // Yellow for last minute
+                    mod.SetUITextColor(timeText, mod.CreateVector(1, 1, 0.2));
+                } else {
+                    // White for normal time
+                    mod.SetUITextColor(timeText, mod.CreateVector(1, 1, 1));
+                }
+            } else {
+                // Default white for other states
+                mod.SetUITextColor(timeText, mod.CreateVector(1, 1, 1));
+            }
+        }
+
+        // Update widget visibility based on game state
+        let shouldShow = matchData.isGamePlayActive() && showTimeWidget;
+        if (widget) {
+            mod.SetUIWidgetVisible(widget, shouldShow);
+        }
+    }
+
+    // Show/hide the score widget
+    export function setScoreWidgetVisible(visible: boolean): void {
+        if (widget) {
+            mod.SetUIWidgetVisible(widget, visible);
+        }
     }
 }
 
