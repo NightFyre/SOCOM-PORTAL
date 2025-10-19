@@ -27,7 +27,6 @@
 // import * as modlib from 'modlib'; // required on server side
 import * as modlib from '../PortalSDK/code/modlib'; // for local testing
 
-
 ////////////////////////////////// PLAYER EVENTS ///////////////////////////////////////
 
 // Triggered when player joins the game. Useful for pregame setup, team management, etc.
@@ -199,6 +198,67 @@ export function OngoingGlobal(): void
 
 /// --------------------------------- CZSEAL --------------------------------- ///
 
+class CZInput
+{
+    private zoomTimes: number[] = [];
+    private lastPatternTime: number = 0;
+
+    public msDoubleTap = 600;       // double tap time window
+    public msTripleTap = 500;       // triple tap time window
+    public msLongHoldTime = 1500;   // long hold time window
+    public msCooldown = 1000;       // cooldown time window
+    public msExpire = 2000;         // expiration time window
+
+    /* detect double tap input via zoom communication - returns true if double tap detected, false otherwise */
+    dtcInput(player: mod.Player, state: mod.SoldierStateBool): boolean;
+    dtcInput(player: mod.Player, state: boolean): boolean;
+    dtcInput(player: mod.Player, state: mod.SoldierStateBool | boolean): boolean
+    {
+        const currentTime = Date.now();
+
+        // get player ID
+        const playerID = mod.GetObjId(player);
+        if (playerID === -1)
+            return false;
+
+        // Handle different parameter types
+        let actualState: boolean;
+        if (typeof state === 'boolean') {
+            actualState = state;
+        } else {
+            // state is mod.SoldierStateBool - get the actual boolean value
+            actualState = mod.GetSoldierState(player, state);
+        }
+
+        // Only process when state is true (event triggered)
+        if (!actualState)
+            return false;
+
+        // Clean up old zoom events & add latest
+        this.zoomTimes = this.zoomTimes.filter(time => currentTime - time < this.msExpire);
+        this.zoomTimes.push(currentTime);
+
+        // wait 1 second between changing states
+        if (currentTime - this.lastPatternTime < this.msCooldown)
+            return false;
+
+        // Need at least 2 quick zooms to trigger shoulder switch
+        if (this.zoomTimes.length <= 1)
+            return false;
+
+        const timeBetween = this.zoomTimes[this.zoomTimes.length - 1] - this.zoomTimes[this.zoomTimes.length - 2];
+
+        // Double-tap detected
+        if (timeBetween > this.msDoubleTap)
+            return false;
+        
+        this.lastPatternTime = currentTime;
+        this.zoomTimes = []; // Clear pattern buffer
+        console.log(`Player ${playerID}: detected double-tap input via ${typeof state === 'boolean' ? 'boolean' : state} communication`);
+        return true;
+    }
+}
+
 
 export enum SoldierCameraView
 {
@@ -279,6 +339,9 @@ class CZSeal
     isAdmin: boolean = false; // Track if this player is an admin
     cameraView: SoldierCameraView = SoldierCameraView.RightShoulder; // current camera view mode
 
+    // zoom pattern detection for shoulder switching
+    private inputDetector = new CZInput();
+
     // seal stats
     stats: CZSealStats = new CZSealStats();
 
@@ -351,19 +414,30 @@ class CZSeal
     {
         if (this.isAI)
             return;
-
-        let currentShoulder = this.cameraView === SoldierCameraView.RightShoulder ? 0 : 1;
         
         /* get zoom state */
         let isCurrentlyZooming = mod.GetSoldierState(this.player, mod.SoldierStateBool.IsZooming);
         if (isCurrentlyZooming == this.isZooming)
             return;
 
+        /* detect zoom pattern for shoulder switching */
+        if (this.inputDetector.dtcInput(this.player, isCurrentlyZooming))
+            this.switchShoulderView();
+
         /* set zoom state */
         this.isZooming = isCurrentlyZooming;
+        let currentShoulder = this.cameraView === SoldierCameraView.RightShoulder ? 0 : 1;
         
         /* update camera */
         mod.SetCameraTypeForPlayer(this.player, this.isZooming ? mod.Cameras.FirstPerson : mod.Cameras.ThirdPerson, currentShoulder);
+    }
+
+    /* switch between left and right shoulder view */
+    private switchShoulderView(): void
+    {
+        this.cameraView = this.cameraView === SoldierCameraView.RightShoulder ? 
+            SoldierCameraView.LeftShoulder : 
+            SoldierCameraView.RightShoulder;
     }
 
     /* triggered when the player earns an assist */
