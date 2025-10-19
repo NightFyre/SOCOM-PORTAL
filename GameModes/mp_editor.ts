@@ -40,17 +40,19 @@ export function OngoingGlobal(): void
     SOCOM.CZGame.OngoingGlobal();
 }
 
+export function OnPlayerUIButtonEvent(player: mod.Player, widget: mod.UIWidget, event: mod.UIButtonEvent) {
+    
+}
+
 // https://github.com/xCENTx/SOCOM-PORTAL
 export namespace SOCOM {
 
-    export enum SoldierCameraView
-    {
+    export enum SoldierCameraView {
         RightShoulder,
         LeftShoulder
     }
 
-    export enum GameState
-    {
+    export enum GameState {
         GameInit,
         GameActive,
         GameEnd
@@ -173,7 +175,9 @@ export namespace SOCOM {
             let seal = CZSeal.get(eventPlayer);
             if (!seal)
                 return;
-            
+
+            mod.SetCameraTypeForPlayer(seal.player, mod.Cameras.ThirdPerson, seal.cameraView === SoldierCameraView.RightShoulder ? 0 : 1);
+                        
             console.log(`Player Deployed: ID ${seal.playerID} | TeamID: ${seal.teamID} | isAI: ${seal.isAI}`);
         }
 
@@ -187,12 +191,6 @@ export namespace SOCOM {
         }
     }
 
-    //  export class CZSealCtrl {
-    //      seal: CZSeal;
-    //      showMenu: boolean = false;
-    //      
-    //  }
-
     export class CZSeal {
         player: mod.Player;
         playerID: number;
@@ -202,8 +200,7 @@ export namespace SOCOM {
         cameraView: SoldierCameraView = SoldierCameraView.RightShoulder; // current camera view mode
 
         // zoom pattern detection for shoulder switching
-        private zoomTimes: number[] = [];
-        private lastPatternTime: number = 0;
+        private inputDetector = new CZInput();
 
         // static list of all player instances
         static sealObjects: mod.Player[] = [];
@@ -215,6 +212,7 @@ export namespace SOCOM {
             this.playerID = mod.GetObjId(player);
             this.teamID = mod.GetObjId(mod.GetTeam(player)); // teamID should be 1 or 2
             this.isAI = mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier);
+
             CZSeal.sealObjects.push(player);
         }
 
@@ -258,7 +256,7 @@ export namespace SOCOM {
                     this.sealObjects.splice(index, 1);
                 }
             }
-
+            
             delete this.#allSealPlayers[playerID];
         }
 
@@ -271,63 +269,24 @@ export namespace SOCOM {
         /* call in game update to update camera state */
         CameraUpdate(): void
         {
-            /* ignore AI players */
-            if (this.isAI)
+            if (this.isAI || !mod.GetSoldierState(this.player, mod.SoldierStateBool.IsAlive))
                 return;
-
-            /* get current shoulder view */
-            let currentShoulder = this.cameraView === SoldierCameraView.RightShoulder ? 0 : 1;
-
+            
             /* get zoom state */
             let isCurrentlyZooming = mod.GetSoldierState(this.player, mod.SoldierStateBool.IsZooming);
-            
-            // Detect zoom pattern for shoulder switching
-            if (isCurrentlyZooming !== this.isZooming) {
-                this.detectZoomPattern(isCurrentlyZooming);
-                // Update currentShoulder in case it changed from pattern detection
-                currentShoulder = this.cameraView === SoldierCameraView.RightShoulder ? 0 : 1;
-            }
-            
             if (isCurrentlyZooming == this.isZooming)
                 return;
-
+    
+            /* detect zoom pattern for shoulder switching */
+            if (this.inputDetector.dtcInput(this.player, isCurrentlyZooming))
+                this.switchShoulderView();
+    
             /* set zoom state */
             this.isZooming = isCurrentlyZooming;
-
+            let currentShoulder = this.cameraView === SoldierCameraView.RightShoulder ? 0 : 1;
+            
             /* update camera */
             mod.SetCameraTypeForPlayer(this.player, this.isZooming ? mod.Cameras.FirstPerson : mod.Cameras.ThirdPerson, currentShoulder);
-        }
-
-        /* detect zoom pattern for shoulder switching */
-        private detectZoomPattern(isCurrentlyZooming: boolean): void
-        {
-            const currentTime = Date.now();
-            
-            // Only track zoom IN events (when player starts zooming)
-            if (!isCurrentlyZooming) return;
-            
-            // Clean up old zoom events (older than 1.5 seconds)
-            this.zoomTimes = this.zoomTimes.filter(time => currentTime - time < 1500);
-            
-            // Add current zoom event
-            this.zoomTimes.push(currentTime);
-            
-            // Prevent spam - require 1 second between shoulder switches
-            if (currentTime - this.lastPatternTime < 1000) return;
-            
-            // Need at least 2 quick zooms to trigger shoulder switch
-            if (this.zoomTimes.length >= 2) {
-                const timeBetween = this.zoomTimes[this.zoomTimes.length - 1] - this.zoomTimes[this.zoomTimes.length - 2];
-                
-                // Double-tap detected (within 600ms)
-                if (timeBetween < 600) {
-                    this.switchShoulderView();
-                    this.lastPatternTime = currentTime;
-                    this.zoomTimes = []; // Clear pattern buffer
-                    
-                    console.log(`Player ${this.playerID}: Shoulder switched to ${this.cameraView === SoldierCameraView.RightShoulder ? "Right" : "Left"}`);
-                }
-            }
         }
 
         /* switch between left and right shoulder view */
@@ -338,8 +297,69 @@ export namespace SOCOM {
                 SoldierCameraView.RightShoulder;
         }
     }
-}
 
+    export class CZInput {
+        private zoomTimes: number[] = [];
+        private lastPatternTime: number = 0;
+
+        public msDoubleTap = 600;       // double tap time window
+        public msTripleTap = 500;       // triple tap time window
+        public msLongHoldTime = 1500;   // long hold time window
+        public msCooldown = 1000;       // cooldown time window
+        public msExpire = 2000;         // expiration time window
+
+        /* detect double tap input via zoom communication - returns true if double tap detected, false otherwise */
+        dtcInput(player: mod.Player, state: mod.SoldierStateBool): boolean;
+        dtcInput(player: mod.Player, state: boolean): boolean;
+        dtcInput(player: mod.Player, state: mod.SoldierStateBool | boolean): boolean
+        {
+            const currentTime = Date.now();
+
+            // get player ID
+            const playerID = mod.GetObjId(player);
+            if (playerID === -1)
+                return false;
+
+            // Handle different parameter types
+            let actualState: boolean;
+            if (typeof state === 'boolean') {
+                actualState = state;
+            } else {
+                // state is mod.SoldierStateBool - get the actual boolean value
+                actualState = mod.GetSoldierState(player, state);
+            }
+
+            // Only process when state is true (event triggered)
+            if (!actualState)
+                return false;
+
+            // Clean up old zoom events & add latest
+            this.zoomTimes = this.zoomTimes.filter(time => currentTime - time < this.msExpire);
+            this.zoomTimes.push(currentTime);
+
+            // wait 1 second between changing states
+            if (currentTime - this.lastPatternTime < this.msCooldown)
+                return false;
+
+            // Need at least 2 quick zooms to trigger shoulder switch
+            if (this.zoomTimes.length <= 1)
+                return false;
+
+            const timeBetween = this.zoomTimes[this.zoomTimes.length - 1] - this.zoomTimes[this.zoomTimes.length - 2];
+
+            // Double-tap detected (within 600ms)
+            if (timeBetween > this.msDoubleTap)
+                return false;
+
+            //  this.switchShoulderView();
+            this.lastPatternTime = currentTime;
+            this.zoomTimes = []; // Clear pattern buffer
+            console.log(`Player ${playerID}: detected double-tap input via ${typeof state === 'boolean' ? 'boolean' : state} communication`);
+
+            return true;
+        }
+    }
+}
 
 // https://github.com/JDWardle/BFPortalScripts/blob/main/logging/logging.ts
 export namespace Logging {
