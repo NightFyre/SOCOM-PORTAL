@@ -533,6 +533,7 @@ class CZSeal
         if (mod.EventDeathTypeCompare(eventDeathType, mod.PlayerDeathTypes.Headshot))
             killerSeal.stats.headshotKills[0]++;
 
+        console.log(`Player ${killerSeal.playerID} eliminated Player ${this.playerID}`);
         log.info(mod.Message("{} eliminated {}", killerSeal.player, this.player));
         // mod.DisplayHighlightedWorldLogMessage(mod.Message("elimination"), killerSeal.player);
     }
@@ -652,7 +653,9 @@ class CZMatchData
     // private singleton instance
     private static instance: CZMatchData | undefined;
     
-    constructor() {}
+    constructor() 
+    {
+    }
 
     static get(): CZMatchData
     {
