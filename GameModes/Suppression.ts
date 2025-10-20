@@ -26,6 +26,7 @@
 */
 // import * as modlib from 'modlib'; // required on server side
 import * as modlib from '../PortalSDK/code/modlib'; // for local testing
+const WorldIcon_Team_Players = 700; // 700 - 715
 
 ////////////////////////////////// PLAYER EVENTS ///////////////////////////////////////
 
@@ -135,10 +136,27 @@ export async function OnGameModeStarted()
     log.info(mod.Message("SOCOM PORTAL - Suppression Game Mode Started"));
 
     /* Initialize UI widgets */
-    UI.initializeWidgets();
+    UI.RoundInfoWidget.init();
 
     /* create match data instance */
     let matchData = CZMatchData.get();
+
+    const deployCam = mod.GetSpatialObject(1003);
+    if (mod.GetObjId(deployCam) === 1003)
+    {
+        mod.SetObjectTransform(deployCam, mod.CreateTransform(mod.CreateVector(0,0,-100), mod.CreateVector(0,90,0)));
+        console.log("found deploy cam , resetting transform");
+    }
+
+    // setup world icons
+    for (let i = 0; i < 16; i++)
+    {
+        const icon = mod.GetWorldIcon(WorldIcon_Team_Players + i); // preload team player icons
+        mod.EnableWorldIconImage(icon, false); // disable icon image
+        mod.EnableWorldIconText(icon, false); // disable icon text
+        mod.SetWorldIconColor(icon, mod.CreateVector(1, 1, 1)); // white color
+        mod.SetWorldIconPosition(icon, mod.CreateVector(0, 0, -100000)); // move icon out of view and bury it deep
+    }
 
     while (true)
     {
@@ -181,8 +199,10 @@ export function OngoingGlobal(): void
     if (!matchData)
         return; // invalid match data object
 
+    matchData.updateTags();
+
     // Update score widget UI
-    UI.updateScoreWidget();
+    UI.RoundInfoWidget.update();
 
     // Check all players for camera updates (runs every frame)
     for (let player of CZSeal.sealObjects)
@@ -198,66 +218,6 @@ export function OngoingGlobal(): void
 
 /// --------------------------------- CZSEAL --------------------------------- ///
 
-class CZInput
-{
-    private zoomTimes: number[] = [];
-    private lastPatternTime: number = 0;
-
-    public msDoubleTap = 600;       // double tap time window
-    public msTripleTap = 500;       // triple tap time window
-    public msLongHoldTime = 1500;   // long hold time window
-    public msCooldown = 1000;       // cooldown time window
-    public msExpire = 2000;         // expiration time window
-
-    /* detect double tap input via zoom communication - returns true if double tap detected, false otherwise */
-    dtcInput(player: mod.Player, state: mod.SoldierStateBool): boolean;
-    dtcInput(player: mod.Player, state: boolean): boolean;
-    dtcInput(player: mod.Player, state: mod.SoldierStateBool | boolean): boolean
-    {
-        const currentTime = Date.now();
-
-        // get player ID
-        const playerID = mod.GetObjId(player);
-        if (playerID === -1)
-            return false;
-
-        // Handle different parameter types
-        let actualState: boolean;
-        if (typeof state === 'boolean') {
-            actualState = state;
-        } else {
-            // state is mod.SoldierStateBool - get the actual boolean value
-            actualState = mod.GetSoldierState(player, state);
-        }
-
-        // Only process when state is true (event triggered)
-        if (!actualState)
-            return false;
-
-        // Clean up old zoom events & add latest
-        this.zoomTimes = this.zoomTimes.filter(time => currentTime - time < this.msExpire);
-        this.zoomTimes.push(currentTime);
-
-        // wait 1 second between changing states
-        if (currentTime - this.lastPatternTime < this.msCooldown)
-            return false;
-
-        // Need at least 2 quick zooms to trigger shoulder switch
-        if (this.zoomTimes.length <= 1)
-            return false;
-
-        const timeBetween = this.zoomTimes[this.zoomTimes.length - 1] - this.zoomTimes[this.zoomTimes.length - 2];
-
-        // Double-tap detected
-        if (timeBetween > this.msDoubleTap)
-            return false;
-        
-        this.lastPatternTime = currentTime;
-        this.zoomTimes = []; // Clear pattern buffer
-        console.log(`Player ${playerID}: detected double-tap input via ${typeof state === 'boolean' ? 'boolean' : state} communication`);
-        return true;
-    }
-}
 
 
 export enum SoldierCameraView
@@ -327,9 +287,11 @@ class CZSeal
 {
     player: mod.Player;
     playerID: number;
+    playerTeam: mod.Team;
     teamID: number;
     isAI: boolean;
     name: mod.Message;
+    teamIcon: mod.WorldIcon;
     hasSpawned: boolean = false;
     isAlive: boolean = false;
     maxHealth = 100; // AI get 200 health , players get 100
@@ -340,7 +302,7 @@ class CZSeal
     cameraView: SoldierCameraView = SoldierCameraView.RightShoulder; // current camera view mode
 
     // zoom pattern detection for shoulder switching
-    private inputDetector = new CZInput();
+    private inputDetector = new Utility.Input();
 
     // seal stats
     stats: CZSealStats = new CZSealStats();
@@ -353,9 +315,14 @@ class CZSeal
     {
         this.player = player;
         this.playerID = mod.GetObjId(player);
-        this.teamID = mod.GetObjId(mod.GetTeam(player)); // teamID should be 1 or 2
+        this.playerTeam = mod.GetTeam(player);
+        this.teamID = mod.GetObjId(this.playerTeam); // teamID should be 1 or 2
         this.isAI = mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier);
         this.name = this.getPlayerName();
+        this.teamIcon = mod.GetWorldIcon(WorldIcon_Team_Players + this.playerID);
+        mod.SetWorldIconText(this.teamIcon, mod.Message("{}", this.player));
+        mod.SetWorldIconOwner(this.teamIcon, this.playerTeam);
+        mod.EnableWorldIconText(this.teamIcon, true);
         CZSeal.sealObjects.push(player);
     }
 
@@ -393,6 +360,14 @@ class CZSeal
         // Remove from the players dictionary
         let seal = this.#allSealPlayers[playerID];
         if (seal) {
+
+            // clear icon owner
+            mod.EnableWorldIconImage(seal.teamIcon, false); // disable icon image
+            mod.EnableWorldIconText(seal.teamIcon, false); // disable icon text
+            mod.SetWorldIconOwner(seal.teamIcon, this.#allSealPlayers[0].player); // set icon owner to server owner
+            mod.SetWorldIconText(seal.teamIcon, mod.Message("this should not be visible")); // clear name
+            mod.SetWorldIconPosition(seal.teamIcon, mod.CreateVector(0, 0, -100000)); // move icon out of view and bury it deep
+
             // Remove from sealObjects array
             const index = this.sealObjects.indexOf(seal.player);
             if (index > -1) {
@@ -517,6 +492,7 @@ class CZSeal
         this.isAlive = false;
         this.stats.deaths[0]++;
         this.currentHealth = 0;
+        mod.EnableWorldIconText(this.teamIcon, false);
 
         /* get killer seal instance */
         let killerSeal = CZSeal.get(eventOtherPlayer as mod.Player);
@@ -527,7 +503,7 @@ class CZSeal
         if (killerSeal === this)
         {
             console.log(`Player ${killerSeal.playerID} killed themselves`);
-            log.info(mod.Message("{} killed themselves", killerSeal.player));
+            //  log.info(mod.Message("{} killed themselves", killerSeal.player));
             return;
         }
 
@@ -537,15 +513,17 @@ class CZSeal
         {
             killerSeal.stats.friendlyFireKills[0]++; // increment friendly fire kills count
             this.stats.friendlyFireDeaths[0]++; // increment friendly fire deaths count
-            console.log(`Player ${killerSeal.playerID} killed friendly Player ${this.playerID}`);
-            log.info(mod.Message("{} killed friendly Player {}", killerSeal.player, this.player));
+            console.log(`Player ${killerSeal.playerID} team killed friendly Player ${this.playerID}`);
+            // log.info(mod.Message("{} team killed friendly Player {}", killerSeal.player, this.player)); : removed as hud will now display this
+            mod.DisplayNotificationMessage(mod.Message("FRIENDLY FIRE WILL NOT BE TOLERATED"), killerSeal.player);
 
             /* HANDLE EXCESSIVE FRIENDLY FIRE */
             if (killerSeal.stats.friendlyFireKills[0] >= 2)
             {
                 mod.Kill(killerSeal.player); // kill the killer for excessive friendly fire
-                console.log(`Player ${killerSeal.playerID} killed for excessive friendly fire`);
-                log.info(mod.Message("{} killed for excessive friendly fire", killerSeal.player));
+                console.log(`Player ${killerSeal.playerID} has been removed from the round for excessive friendly fire`);
+                log.info(mod.Message("{} removed from play due to excessive friendly fire", killerSeal.player));
+                mod.DisplayNotificationMessage(mod.Message("FRIENDLY FIRE: YOU HAVE BEEN REMOVED FROM PLAY"), killerSeal.player);
             }
 
             return;
@@ -555,7 +533,6 @@ class CZSeal
         if (mod.EventDeathTypeCompare(eventDeathType, mod.PlayerDeathTypes.Headshot))
             killerSeal.stats.headshotKills[0]++;
 
-        console.log(`Player ${killerSeal.playerID} killed Player ${this.playerID}`);
         log.info(mod.Message("{} eliminated {}", killerSeal.player, this.player));
         // mod.DisplayHighlightedWorldLogMessage(mod.Message("elimination"), killerSeal.player);
     }
@@ -714,6 +691,21 @@ class CZMatchData
         await mod.Wait(1); // wait 1 second before next update
     }
 
+    // update the position of player name tags
+    updateTags(): void
+    {
+        for (let player of CZSeal.sealObjects)
+        {
+            let seal = CZSeal.get(player);
+            if (!seal || !seal.isValid())
+                continue;
+            
+            mod.SetWorldIconOwner(seal.teamIcon, seal.playerTeam);
+            mod.SetWorldIconPosition(seal.teamIcon, mod.GetSoldierState(player, mod.SoldierStateVector.GetPosition));
+            mod.SetWorldIconText(seal.teamIcon, mod.Message("{}", seal.player));
+        }
+    }
+
     async updateRound(): Promise<void>
     {
         this.roundTime--;   // decrement round time
@@ -806,7 +798,9 @@ class CZMatchData
             seal.isArmed = true;
 
             mod.DeployPlayer(seal.player); // deploy the player
-            
+            mod.SetWorldIconOwner(seal.teamIcon, seal.playerTeam);
+            mod.EnableWorldIconText(seal.teamIcon, true);
+
             if (seal.isAI)
                 seal.setAIBehavior(true); // set ai to battlefield behavior
         }
@@ -816,7 +810,7 @@ class CZMatchData
         
         this.startRound(); // start a new round
         
-        console.log(`Preparing for Round ${this.roundNum + 1}`);
+        console.log(`Preparing for Round ${this.roundNum}`);
     }
 
     startRound(): void
@@ -837,8 +831,7 @@ class CZMatchData
         if (winner)
         {
             this.scores[winner - 1]++;
-            log.info(mod.Message("{} win round {}", this.getTeamName(winner - 1), this.roundNum));
-            mod.DisplayNotificationMessage(mod.Message("{} win", this.getTeamName(winner - 1)));
+            mod.DisplayNotificationMessage(mod.Message("{} win round {}", this.getTeamName(winner - 1), this.roundNum));
         }
         else
             mod.DisplayNotificationMessage(mod.Message("Round {} ended in a draw", this.roundNum));
@@ -885,6 +878,8 @@ class CZMatchData
     /* triggered when a player joins the game */
     OnPlayerJoined(eventPlayer: mod.Player): void
     {
+        const playerID = mod.GetObjId(eventPlayer);
+        console.log(`Player joined the game with id: ${playerID}`);
         let seal = CZSeal.get(eventPlayer);
         if (!seal)
             return; // invalid seal object
@@ -898,7 +893,6 @@ class CZMatchData
         if (seal.isAI)
             this.bots++;
 
-        console.log(`Player ${seal.playerID} joined the game`);
         
         // check if the match is in progress
         if (this.state !== GameState.WaitingForPlayers)
@@ -942,6 +936,9 @@ class CZMatchData
         let seal = CZSeal.get(eventPlayer);
         if (!seal)
             return;
+
+        seal.playerTeam = mod.GetTeam(eventPlayer); // update team
+        seal.teamID = mod.GetObjId(seal.playerTeam); // update teamID
 
         /* seal already spawned for this round */
         if (seal.hasSpawned)
@@ -1115,7 +1112,7 @@ class CZConsole
     }
 }
 
-
+/// ------------------------------ NAMESPACE ------------------------------- ///
 
 // https://github.com/JDWardle/BFPortalScripts/blob/main/logging/logging.ts
 export namespace Logging {
@@ -1333,203 +1330,1271 @@ export namespace Logging {
         return widget;
     }
 }
+const log = new Logging.Logger(Logging.LogLevel.Debug, 10, 10); // LogLevel, max visible messages, cleanup time in seconds
 
 
 // https://staging.d70cu09wjw7ws.amplifyapp.com/
 // https://discord.com/channels/870246147455877181/1428410039080718487
 export namespace UI {
 
-    const widget = modlib.ParseUI(
+    export class RoundInfoWidget
     {
-      type: "Container",
-      name: "Container_Round_Info",
-      //    position: [-10, -250],
-      position: [0, 0],
-      size: [220, 100],
-      anchor: mod.UIAnchor.TopCenter,
-      visible: true,
-      textLabel: "",
-      textColor: [1, 1, 1],
-      textAlpha: 0.5,
-      textSize: 24,
-      textAnchor: mod.UIAnchor.Center,
-      padding: 10,
-      bgColor: [0.1, 0.1, 0.1],
-      bgAlpha: 0.8,
-      bgFill: mod.UIBgFill.Blur,
-      imageType: mod.UIImageType.None,
-      imageColor: [1, 1, 1],
-      imageAlpha: 1,
-      buttonEnabled: false,
-      children: [
+    
+        static widget = modlib.ParseUI(
         {
-          type: "Text",
-          name: "Text_Score_SealsRemaining",
+          type: "Container",
+          name: "Container_Round_Info",
+          //    position: [-10, -250],
           position: [0, 0],
-          size: [90, 50],
-          anchor: mod.UIAnchor.TopLeft,
+          size: [220, 100],
+          anchor: mod.UIAnchor.TopCenter,
           visible: true,
-          textLabel: "SEALs: 0",
-          textColor: [0.2, 0.6, 1],
-          textAlpha: 1,
-          textSize: 18,
+          textLabel: "",
+          textColor: [1, 1, 1],
+          textAlpha: 0.5,
+          textSize: 24,
           textAnchor: mod.UIAnchor.Center,
-          padding: 5,
+          padding: 10,
           bgColor: [0.1, 0.1, 0.1],
-          bgAlpha: 0,
-          bgFill: mod.UIBgFill.Solid,
+          bgAlpha: 0.8,
+          bgFill: mod.UIBgFill.Blur,
           imageType: mod.UIImageType.None,
           imageColor: [1, 1, 1],
           imageAlpha: 1,
-          buttonEnabled: false
-        },
+          buttonEnabled: false,
+          children: [
+            {
+              type: "Text",
+              name: "Text_Score_SealsRemaining",
+              position: [0, 0],
+              size: [90, 50],
+              anchor: mod.UIAnchor.TopLeft,
+              visible: true,
+              textLabel: "SEALs: 0",
+              textColor: [0.2, 0.6, 1],
+              textAlpha: 1,
+              textSize: 18,
+              textAnchor: mod.UIAnchor.Center,
+              padding: 5,
+              bgColor: [0.1, 0.1, 0.1],
+              bgAlpha: 0,
+              bgFill: mod.UIBgFill.Solid,
+              imageType: mod.UIImageType.None,
+              imageColor: [1, 1, 1],
+              imageAlpha: 1,
+              buttonEnabled: false
+            },
+            {
+              type: "Text",
+              name: "Text_Score_MercsRemaining",
+              position: [0, 0],
+              size: [90, 50],
+              anchor: mod.UIAnchor.TopRight,
+              visible: true,
+              textLabel: "MERCs: 0",
+              textColor: [1, 0.3, 0.3],
+              textAlpha: 1,
+              textSize: 18,
+              textAnchor: mod.UIAnchor.Center,
+              padding: 5,
+              bgColor: [0.1, 0.1, 0.1],
+              bgAlpha: 0,
+              bgFill: mod.UIBgFill.Solid,
+              imageType: mod.UIImageType.None,
+              imageColor: [1, 1, 1],
+              imageAlpha: 1,
+              buttonEnabled: false
+            },
+            {
+              type: "Text",
+              name: "Text_Score_RoundTime",
+              position: [0, 0],
+              size: [180, 50],
+              anchor: mod.UIAnchor.BottomCenter,
+              visible: true,
+              textLabel: "4:00",
+              textColor: [1, 1, 1],
+              textAlpha: 1,
+              textSize: 22,
+              textAnchor: mod.UIAnchor.Center,
+              padding: 5,
+              bgColor: [0.1, 0.1, 0.1],
+              bgAlpha: 0,
+              bgFill: mod.UIBgFill.Solid,
+              imageType: mod.UIImageType.None,
+              imageColor: [1, 1, 1],
+              imageAlpha: 1,
+              buttonEnabled: false
+            }
+          ]
+        }
+        );
+
+        // Store widget references for updates
+        static sealsText: mod.UIWidget | undefined;
+        static mercsText: mod.UIWidget | undefined;
+        static timeText: mod.UIWidget | undefined;
+
+
+        private constructor() {}
+
+        // Initialize widget references
+        static init(): void 
         {
-          type: "Text",
-          name: "Text_Score_MercsRemaining",
-          position: [0, 0],
-          size: [90, 50],
-          anchor: mod.UIAnchor.TopRight,
-          visible: true,
-          textLabel: "MERCs: 0",
-          textColor: [1, 0.3, 0.3],
-          textAlpha: 1,
-          textSize: 18,
-          textAnchor: mod.UIAnchor.Center,
-          padding: 5,
-          bgColor: [0.1, 0.1, 0.1],
-          bgAlpha: 0,
-          bgFill: mod.UIBgFill.Solid,
-          imageType: mod.UIImageType.None,
-          imageColor: [1, 1, 1],
-          imageAlpha: 1,
-          buttonEnabled: false
-        },
+            this.sealsText = mod.FindUIWidgetWithName("Text_Score_SealsRemaining");
+            this.mercsText = mod.FindUIWidgetWithName("Text_Score_MercsRemaining");
+            this.timeText = mod.FindUIWidgetWithName("Text_Score_RoundTime");
+        }
+
+        // Update the score widget with current game data
+        static update(): void {
+            let matchData = CZMatchData.get();
+            if (!matchData) {
+                return;
+            }
+
+            // Get alive player counts for each team
+            let team1 = mod.GetTeam(1);
+            let team2 = mod.GetTeam(2);
+            let sealsAlive = matchData.getAlivePlayers(team1).length;
+            let mercsAlive = matchData.getAlivePlayers(team2).length;
+
+            // Format time remaining and status based on game state
+            let timeString = "00:00";
+            let showTimeWidget = true;
+
+            switch (matchData.state) {
+                case GameState.WaitingForPlayers:
+                    timeString = "Waiting for players...";
+                    showTimeWidget = false;
+                    break;
+                case GameState.PreRound:
+                    timeString = "Preparing...";
+                    break;
+                case GameState.RoundEnd:
+                    timeString = "Round Over";
+                    break;
+                case GameState.MatchEnd:
+                    timeString = "Match Over";
+                    break;
+                default: break;
+            }
+
+            /* SEALs ALIVE */
+            if (this.sealsText)
+                mod.SetUITextLabel(this.sealsText, mod.Message("SEALs: {}", sealsAlive));
+
+            /* MERCs ALIVE */
+            if (this.mercsText)
+                mod.SetUITextLabel(this.mercsText, mod.Message("MERCs: {}", mercsAlive));
+
+            /* ROUND TIMER */
+            if (this.timeText) {
+                if (matchData.state == GameState.RoundActive) {
+                    let timeLeft = matchData.roundTime;
+                    let minutes = Math.floor(timeLeft / 60);
+                    let seconds = timeLeft % 60;
+                    if (seconds < 10) {
+                        mod.SetUITextLabel(this.timeText, mod.Message("{}:0{}", minutes, seconds));
+                    } else {
+                        mod.SetUITextLabel(this.timeText, mod.Message("{}:{}", minutes, seconds));
+                    }
+                }
+                else
+                    mod.SetUITextLabel(this.timeText, mod.Message(timeString));
+
+                // Change color based on time remaining (only during active rounds)
+                if (matchData.state === GameState.RoundActive) {
+                    let timeLeft = matchData.roundTime;
+                    if (timeLeft <= 30) {
+                        // Red for last 30 seconds
+                        mod.SetUITextColor(this.timeText, mod.CreateVector(1, 0.2, 0.2));
+                    } else if (timeLeft <= 60) {
+                        // Yellow for last minute
+                        mod.SetUITextColor(this.timeText, mod.CreateVector(1, 1, 0.2));
+                    } else {
+                        // White for normal time
+                        mod.SetUITextColor(this.timeText, mod.CreateVector(1, 1, 1));
+                    }
+                } else {
+                    // Default white for other states
+                    mod.SetUITextColor(this.timeText, mod.CreateVector(1, 1, 1));
+                }
+            }
+
+            // Update widget visibility based on game state
+            let shouldShow = matchData.isGamePlayActive() && showTimeWidget;
+            if (this.widget) {
+                mod.SetUIWidgetVisible(this.widget, shouldShow);
+            }
+        }
+
+        // Show/hide the score widget
+        static ShowWidget(visible: boolean): void {
+            if (this.widget) {
+                mod.SetUIWidgetVisible(this.widget, visible);
+            }
+        }
+    }
+
+    export class DebugWidget
+    {
+        static widget = modlib.ParseUI(
         {
-          type: "Text",
-          name: "Text_Score_RoundTime",
+          type: "Container",
+          name: "Container_Body",
           position: [0, 0],
-          size: [180, 50],
-          anchor: mod.UIAnchor.BottomCenter,
+          size: [800, 600],
+          anchor: mod.UIAnchor.Center,
           visible: true,
-          textLabel: "4:00",
+          textLabel: "",
           textColor: [1, 1, 1],
           textAlpha: 1,
-          textSize: 22,
+          textSize: 24,
           textAnchor: mod.UIAnchor.Center,
-          padding: 5,
-          bgColor: [0.1, 0.1, 0.1],
-          bgAlpha: 0,
-          bgFill: mod.UIBgFill.Solid,
+          padding: 0,
+          bgColor: [0.2118, 0.2235, 0.2353],
+          bgAlpha: 0.8,
+          bgFill: mod.UIBgFill.Blur,
           imageType: mod.UIImageType.None,
           imageColor: [1, 1, 1],
           imageAlpha: 1,
-          buttonEnabled: false
-        }
-      ]
-    }
-    );
-
-    // Store widget references for updates
-    let sealsText: mod.UIWidget | undefined;
-    let mercsText: mod.UIWidget | undefined;
-    let timeText: mod.UIWidget | undefined;
-
-    // Initialize widget references
-    export function initializeWidgets(): void {
-        sealsText = mod.FindUIWidgetWithName("Text_Score_SealsRemaining");
-        mercsText = mod.FindUIWidgetWithName("Text_Score_MercsRemaining");
-        timeText = mod.FindUIWidgetWithName("Text_Score_RoundTime");
-    }
-
-    // Update the score widget with current game data
-    export function updateScoreWidget(): void {
-        let matchData = CZMatchData.get();
-        if (!matchData) {
-            return;
-        }
-
-        // Get alive player counts for each team
-        let team1 = mod.GetTeam(1);
-        let team2 = mod.GetTeam(2);
-        let sealsAlive = matchData.getAlivePlayers(team1).length;
-        let mercsAlive = matchData.getAlivePlayers(team2).length;
-
-        // Format time remaining and status based on game state
-        let timeString = "00:00";
-        let showTimeWidget = true;
-
-        switch (matchData.state) {
-            case GameState.WaitingForPlayers:
-                timeString = "Waiting for players...";
-                showTimeWidget = false;
-                break;
-            case GameState.PreRound:
-                timeString = "Preparing...";
-                break;
-            case GameState.RoundEnd:
-                timeString = "Round Over";
-                break;
-            case GameState.MatchEnd:
-                timeString = "Match Over";
-                break;
-            default: break;
-        }
-
-        /* SEALs ALIVE */
-        if (sealsText)
-            mod.SetUITextLabel(sealsText, mod.Message("SEALs: {}", sealsAlive));
-
-        /* MERCs ALIVE */
-        if (mercsText)
-            mod.SetUITextLabel(mercsText, mod.Message("MERCs: {}", mercsAlive));
-
-        /* ROUND TIMER */
-        if (timeText) {
-            if (matchData.state == GameState.RoundActive) {
-                let timeLeft = matchData.roundTime;
-                let minutes = Math.floor(timeLeft / 60);
-                let seconds = timeLeft % 60;
-                if (seconds < 10) {
-                    mod.SetUITextLabel(timeText, mod.Message("{}:0{}", minutes, seconds));
-                } else {
-                    mod.SetUITextLabel(timeText, mod.Message("{}:{}", minutes, seconds));
+          buttonEnabled: false,
+          children: [
+            {
+              type: "Button",
+              name: "Button_HideUI",
+              position: [0, 0],
+              size: [50, 20],
+              anchor: mod.UIAnchor.TopRight,
+              visible: true,
+              textLabel: "X",
+              textColor: [1, 1, 1],
+              textAlpha: 0.8,
+              textSize: 16,
+              textAnchor: mod.UIAnchor.Center,
+              padding: 0,
+              bgColor: [0, 0, 0],
+              bgAlpha: 0,
+              bgFill: mod.UIBgFill.Blur,
+              imageType: mod.UIImageType.None,
+              imageColor: [1, 1, 1],
+              imageAlpha: 1,
+              buttonEnabled: false
+            },
+            {
+              type: "Text",
+              name: "Text_Body_Title",
+              position: [0, 0],
+              size: [250.9429, 37.4214],
+              anchor: mod.UIAnchor.TopCenter,
+              visible: true,
+              textLabel: mod.stringkeys.Text_Body_Title,
+              textColor: [1, 1, 1],
+              textAlpha: 0.8,
+              textSize: 18,
+              textAnchor: mod.UIAnchor.Center,
+              padding: 0,
+              bgColor: [0.2, 0.2, 0.2],
+              bgAlpha: 1,
+              bgFill: mod.UIBgFill.Solid,
+              imageType: mod.UIImageType.None,
+              imageColor: [1, 1, 1],
+              imageAlpha: 1,
+              buttonEnabled: false
+            },
+            {
+              type: "Container",
+              name: "Container_Body_Main",
+              position: [0, 10.29],
+              size: [790, 560],
+              anchor: mod.UIAnchor.Center,
+              visible: true,
+              textLabel: "",
+              textColor: [1, 1, 1],
+              textAlpha: 1,
+              textSize: 24,
+              textAnchor: mod.UIAnchor.Center,
+              padding: 0,
+              bgColor: [0.0745, 0.1843, 0.2471],
+              bgAlpha: 1,
+              bgFill: mod.UIBgFill.Blur,
+              imageType: mod.UIImageType.None,
+              imageColor: [1, 1, 1],
+              imageAlpha: 1,
+              buttonEnabled: false,
+              children: [
+                {
+                  type: "Container",
+                  name: "Container_PlayerOptions",
+                  position: [-198.97, 19.56],
+                  size: [370.7965, 369.01],
+                  anchor: mod.UIAnchor.TopCenter,
+                  visible: true,
+                  textLabel: "",
+                  textColor: [1, 1, 1],
+                  textAlpha: 1,
+                  textSize: 24,
+                  textAnchor: mod.UIAnchor.Center,
+                  padding: 0,
+                  bgColor: [0.0314, 0.0431, 0.0431],
+                  bgAlpha: 1,
+                  bgFill: mod.UIBgFill.Blur,
+                  imageType: mod.UIImageType.None,
+                  imageColor: [1, 1, 1],
+                  imageAlpha: 1,
+                  buttonEnabled: false,
+                  children: [
+                    {
+                      type: "Text",
+                      name: "Text_PlayerOptions_MoveSpeed",
+                      position: [0, 0],
+                      size: [147.57, 50],
+                      anchor: mod.UIAnchor.TopRight,
+                      visible: true,
+                      textLabel: mod.stringkeys.Text_PlayerOptions_MoveSpeed,
+                      textColor: [1, 1, 1],
+                      textAlpha: 1,
+                      textSize: 24,
+                      textAnchor: mod.UIAnchor.Center,
+                      padding: 0,
+                      bgColor: [0.2, 0.2, 0.2],
+                      bgAlpha: 1,
+                      bgFill: mod.UIBgFill.Solid,
+                      imageType: mod.UIImageType.None,
+                      imageColor: [1, 1, 1],
+                      imageAlpha: 1,
+                      buttonEnabled: false
+                    },
+                    {
+                      type: "Text",
+                      name: "Text_PlayerOptions_FlyMode",
+                      position: [0, 50],
+                      size: [131.41, 50],
+                      anchor: mod.UIAnchor.TopRight,
+                      visible: true,
+                      textLabel: mod.stringkeys.Text_PlayerOptions_FlyMode,
+                      textColor: [1, 1, 1],
+                      textAlpha: 1,
+                      textSize: 24,
+                      textAnchor: mod.UIAnchor.Center,
+                      padding: 0,
+                      bgColor: [0.2, 0.2, 0.2],
+                      bgAlpha: 1,
+                      bgFill: mod.UIBgFill.Solid,
+                      imageType: mod.UIImageType.None,
+                      imageColor: [1, 1, 1],
+                      imageAlpha: 1,
+                      buttonEnabled: false
+                    },
+                    {
+                      type: "Container",
+                      name: "Container_Player_LocationOptions",
+                      position: [-110, 0],
+                      size: [110, 140],
+                      anchor: mod.UIAnchor.BottomCenter,
+                      visible: true,
+                      textLabel: "",
+                      textColor: [1, 1, 1],
+                      textAlpha: 1,
+                      textSize: 24,
+                      textAnchor: mod.UIAnchor.Center,
+                      padding: 0,
+                      bgColor: [0.2, 0.2, 0.2],
+                      bgAlpha: 1,
+                      bgFill: mod.UIBgFill.GradientRight,
+                      imageType: mod.UIImageType.None,
+                      imageColor: [1, 1, 1],
+                      imageAlpha: 1,
+                      buttonEnabled: false,
+                      children: [
+                        {
+                          type: "Button",
+                          name: "Button_PlayerContainer_Location_Print",
+                          position: [0, 5],
+                          size: [100, 40],
+                          anchor: mod.UIAnchor.TopCenter,
+                          visible: true,
+                          textLabel: "PRINT",
+                          textColor: [1, 1, 1],
+                          textAlpha: 1,
+                          textSize: 24,
+                          textAnchor: mod.UIAnchor.Center,
+                          padding: 0,
+                          bgColor: [0.2, 0.2, 0.2],
+                          bgAlpha: 1,
+                          bgFill: mod.UIBgFill.None,
+                          imageType: mod.UIImageType.None,
+                          imageColor: [1, 1, 1],
+                          imageAlpha: 1,
+                          buttonEnabled: false
+                        },
+                        {
+                          type: "Button",
+                          name: "Button_PlayerContainer_Location_Save",
+                          position: [0, 50],
+                          size: [100, 40],
+                          anchor: mod.UIAnchor.TopCenter,
+                          visible: true,
+                          textLabel: "SAVE",
+                          textColor: [1, 1, 1],
+                          textAlpha: 1,
+                          textSize: 24,
+                          textAnchor: mod.UIAnchor.Center,
+                          padding: 0,
+                          bgColor: [0.2, 0.2, 0.2],
+                          bgAlpha: 1,
+                          bgFill: mod.UIBgFill.None,
+                          imageType: mod.UIImageType.None,
+                          imageColor: [1, 1, 1],
+                          imageAlpha: 1,
+                          buttonEnabled: false
+                        },
+                        {
+                          type: "Button",
+                          name: "Button_PlayerContainer_Location_Tele",
+                          position: [0, 90],
+                          size: [100, 40],
+                          anchor: mod.UIAnchor.TopCenter,
+                          visible: true,
+                          textLabel: "TELE",
+                          textColor: [1, 1, 1],
+                          textAlpha: 1,
+                          textSize: 24,
+                          textAnchor: mod.UIAnchor.Center,
+                          padding: 0,
+                          bgColor: [0.2, 0.2, 0.2],
+                          bgAlpha: 1,
+                          bgFill: mod.UIBgFill.None,
+                          imageType: mod.UIImageType.None,
+                          imageColor: [1, 1, 1],
+                          imageAlpha: 1,
+                          buttonEnabled: false
+                        }
+                      ]
+                    },
+                    {
+                      type: "Container",
+                      name: "Container_Player_CameraOptions",
+                      position: [0, 0],
+                      size: [110, 185],
+                      anchor: mod.UIAnchor.BottomCenter,
+                      visible: true,
+                      textLabel: "",
+                      textColor: [1, 1, 1],
+                      textAlpha: 1,
+                      textSize: 24,
+                      textAnchor: mod.UIAnchor.Center,
+                      padding: 0,
+                      bgColor: [0.2, 0.2, 0.2],
+                      bgAlpha: 1,
+                      bgFill: mod.UIBgFill.GradientTop,
+                      imageType: mod.UIImageType.None,
+                      imageColor: [1, 1, 1],
+                      imageAlpha: 1,
+                      buttonEnabled: false,
+                      children: [
+                        {
+                          type: "Button",
+                          name: "Button_PlayerContainer_Camera_FPS",
+                          position: [0, 5],
+                          size: [100, 40],
+                          anchor: mod.UIAnchor.TopCenter,
+                          visible: true,
+                          textLabel: "FPS",
+                          textColor: [1, 1, 1],
+                          textAlpha: 1,
+                          textSize: 24,
+                          textAnchor: mod.UIAnchor.Center,
+                          padding: 0,
+                          bgColor: [0.2, 0.2, 0.2],
+                          bgAlpha: 1,
+                          bgFill: mod.UIBgFill.None,
+                          imageType: mod.UIImageType.None,
+                          imageColor: [1, 1, 1],
+                          imageAlpha: 1,
+                          buttonEnabled: false
+                        },
+                        {
+                          type: "Button",
+                          name: "Button_PlayerContainer_Camera_TPS",
+                          position: [0, 50],
+                          size: [100, 40],
+                          anchor: mod.UIAnchor.TopCenter,
+                          visible: true,
+                          textLabel: "TPS",
+                          textColor: [1, 1, 1],
+                          textAlpha: 1,
+                          textSize: 24,
+                          textAnchor: mod.UIAnchor.Center,
+                          padding: 0,
+                          bgColor: [0.2, 0.2, 0.2],
+                          bgAlpha: 1,
+                          bgFill: mod.UIBgFill.None,
+                          imageType: mod.UIImageType.None,
+                          imageColor: [1, 1, 1],
+                          imageAlpha: 1,
+                          buttonEnabled: false
+                        },
+                        {
+                          type: "Button",
+                          name: "Button_PlayerContainer_Camera_Free",
+                          position: [0, 95],
+                          size: [100, 40],
+                          anchor: mod.UIAnchor.TopCenter,
+                          visible: true,
+                          textLabel: "FREE",
+                          textColor: [1, 1, 1],
+                          textAlpha: 1,
+                          textSize: 24,
+                          textAnchor: mod.UIAnchor.Center,
+                          padding: 0,
+                          bgColor: [0.2, 0.2, 0.2],
+                          bgAlpha: 1,
+                          bgFill: mod.UIBgFill.None,
+                          imageType: mod.UIImageType.None,
+                          imageColor: [1, 1, 1],
+                          imageAlpha: 1,
+                          buttonEnabled: false
+                        },
+                        {
+                          type: "Button",
+                          name: "Button_PlayerContainer_Camera_Swap",
+                          position: [0, 140],
+                          size: [100, 40],
+                          anchor: mod.UIAnchor.TopCenter,
+                          visible: true,
+                          textLabel: "SWITCH",
+                          textColor: [1, 1, 1],
+                          textAlpha: 1,
+                          textSize: 24,
+                          textAnchor: mod.UIAnchor.Center,
+                          padding: 0,
+                          bgColor: [0.2, 0.2, 0.2],
+                          bgAlpha: 1,
+                          bgFill: mod.UIBgFill.None,
+                          imageType: mod.UIImageType.None,
+                          imageColor: [1, 1, 1],
+                          imageAlpha: 1,
+                          buttonEnabled: false
+                        }
+                      ]
+                    },
+                    {
+                      type: "Container",
+                      name: "Container_Player_FlyMode_Options",
+                      position: [0, 50],
+                      size: [90, 50],
+                      anchor: mod.UIAnchor.TopLeft,
+                      visible: true,
+                      textLabel: "",
+                      textColor: [1, 1, 1],
+                      textAlpha: 1,
+                      textSize: 24,
+                      textAnchor: mod.UIAnchor.Center,
+                      padding: 0,
+                      bgColor: [0.2, 0.2, 0.2],
+                      bgAlpha: 1,
+                      bgFill: mod.UIBgFill.Blur,
+                      imageType: mod.UIImageType.None,
+                      imageColor: [1, 1, 1],
+                      imageAlpha: 1,
+                      buttonEnabled: false,
+                      children: [
+                        {
+                          type: "Button",
+                          name: "Button_QOOZJ",
+                          position: [-20, 0],
+                          size: [40, 30],
+                          anchor: mod.UIAnchor.Center,
+                          visible: true,
+                          textLabel: "on",
+                          textColor: [1, 1, 1],
+                          textAlpha: 1,
+                          textSize: 20,
+                          textAnchor: mod.UIAnchor.Center,
+                          padding: 0,
+                          bgColor: [0.2, 0.2, 0.2],
+                          bgAlpha: 1,
+                          bgFill: mod.UIBgFill.None,
+                          imageType: mod.UIImageType.None,
+                          imageColor: [1, 1, 1],
+                          imageAlpha: 1,
+                          buttonEnabled: false
+                        },
+                        {
+                          type: "Button",
+                          name: "Button_DZW08",
+                          position: [20, 0],
+                          size: [40, 30],
+                          anchor: mod.UIAnchor.Center,
+                          visible: true,
+                          textLabel: "off",
+                          textColor: [1, 1, 1],
+                          textAlpha: 1,
+                          textSize: 20,
+                          textAnchor: mod.UIAnchor.Center,
+                          padding: 0,
+                          bgColor: [0.2, 0.2, 0.2],
+                          bgAlpha: 1,
+                          bgFill: mod.UIBgFill.None,
+                          imageType: mod.UIImageType.None,
+                          imageColor: [1, 1, 1],
+                          imageAlpha: 1,
+                          buttonEnabled: false
+                        }
+                      ]
+                    },
+                    {
+                      type: "Container",
+                      name: "Container_Player_MoveSpeed_Options",
+                      position: [0, 0],
+                      size: [207.49, 50],
+                      anchor: mod.UIAnchor.TopLeft,
+                      visible: true,
+                      textLabel: "",
+                      textColor: [1, 1, 1],
+                      textAlpha: 1,
+                      textSize: 24,
+                      textAnchor: mod.UIAnchor.Center,
+                      padding: 0,
+                      bgColor: [0.2, 0.2, 0.2],
+                      bgAlpha: 1,
+                      bgFill: mod.UIBgFill.Blur,
+                      imageType: mod.UIImageType.None,
+                      imageColor: [1, 1, 1],
+                      imageAlpha: 1,
+                      buttonEnabled: false,
+                      children: [
+                        {
+                          type: "Button",
+                          name: "Button_6L9W6",
+                          position: [-80, 0],
+                          size: [40, 30],
+                          anchor: mod.UIAnchor.Center,
+                          visible: true,
+                          textLabel: "+1",
+                          textColor: [1, 1, 1],
+                          textAlpha: 1,
+                          textSize: 20,
+                          textAnchor: mod.UIAnchor.Center,
+                          padding: 0,
+                          bgColor: [0.2, 0.2, 0.2],
+                          bgAlpha: 1,
+                          bgFill: mod.UIBgFill.None,
+                          imageType: mod.UIImageType.None,
+                          imageColor: [1, 1, 1],
+                          imageAlpha: 1,
+                          buttonEnabled: false
+                        },
+                        {
+                          type: "Button",
+                          name: "Button_AML2T",
+                          position: [-40, 0],
+                          size: [40, 30],
+                          anchor: mod.UIAnchor.Center,
+                          visible: true,
+                          textLabel: "+5",
+                          textColor: [1, 1, 1],
+                          textAlpha: 1,
+                          textSize: 20,
+                          textAnchor: mod.UIAnchor.Center,
+                          padding: 0,
+                          bgColor: [0.2, 0.2, 0.2],
+                          bgAlpha: 1,
+                          bgFill: mod.UIBgFill.None,
+                          imageType: mod.UIImageType.None,
+                          imageColor: [1, 1, 1],
+                          imageAlpha: 1,
+                          buttonEnabled: false
+                        },
+                        {
+                          type: "Button",
+                          name: "Button_Z7EPJ",
+                          position: [0, 0],
+                          size: [40, 30],
+                          anchor: mod.UIAnchor.Center,
+                          visible: true,
+                          textLabel: "+10",
+                          textColor: [1, 1, 1],
+                          textAlpha: 1,
+                          textSize: 20,
+                          textAnchor: mod.UIAnchor.Center,
+                          padding: 0,
+                          bgColor: [0.2, 0.2, 0.2],
+                          bgAlpha: 1,
+                          bgFill: mod.UIBgFill.None,
+                          imageType: mod.UIImageType.None,
+                          imageColor: [1, 1, 1],
+                          imageAlpha: 1,
+                          buttonEnabled: false
+                        },
+                        {
+                          type: "Button",
+                          name: "Button_CGX6F",
+                          position: [65, 0],
+                          size: [60, 30],
+                          anchor: mod.UIAnchor.Center,
+                          visible: true,
+                          textLabel: "reset",
+                          textColor: [1, 1, 1],
+                          textAlpha: 1,
+                          textSize: 20,
+                          textAnchor: mod.UIAnchor.Center,
+                          padding: 0,
+                          bgColor: [0.2, 0.2, 0.2],
+                          bgAlpha: 1,
+                          bgFill: mod.UIBgFill.None,
+                          imageType: mod.UIImageType.None,
+                          imageColor: [1, 1, 1],
+                          imageAlpha: 1,
+                          buttonEnabled: false
+                        }
+                      ]
+                    },
+                    {
+                      type: "Container",
+                      name: "Container_C6AIQ",
+                      position: [110, 0],
+                      size: [110, 140],
+                      anchor: mod.UIAnchor.BottomCenter,
+                      visible: true,
+                      textLabel: "",
+                      textColor: [1, 1, 1],
+                      textAlpha: 1,
+                      textSize: 24,
+                      textAnchor: mod.UIAnchor.Center,
+                      padding: 0,
+                      bgColor: [0.2, 0.2, 0.2],
+                      bgAlpha: 1,
+                      bgFill: mod.UIBgFill.GradientLeft,
+                      imageType: mod.UIImageType.None,
+                      imageColor: [1, 1, 1],
+                      imageAlpha: 1,
+                      buttonEnabled: false
+                    },
+                    {
+                      type: "Text",
+                      name: "Text_E70JJ",
+                      position: [0, -10.29],
+                      size: [100, 50],
+                      anchor: mod.UIAnchor.Center,
+                      visible: true,
+                      textLabel: mod.stringkeys.Text_E70JJ,
+                      textColor: [1, 1, 1],
+                      textAlpha: 1,
+                      textSize: 24,
+                      textAnchor: mod.UIAnchor.Center,
+                      padding: 0,
+                      bgColor: [0.2, 0.2, 0.2],
+                      bgAlpha: 1,
+                      bgFill: mod.UIBgFill.None,
+                      imageType: mod.UIImageType.None,
+                      imageColor: [1, 1, 1],
+                      imageAlpha: 1,
+                      buttonEnabled: false
+                    },
+                    {
+                      type: "Text",
+                      name: "Text_HNFA6",
+                      position: [-110, 38.88],
+                      size: [100, 50],
+                      anchor: mod.UIAnchor.Center,
+                      visible: true,
+                      textLabel: mod.stringkeys.Text_HNFA6,
+                      textColor: [1, 1, 1],
+                      textAlpha: 1,
+                      textSize: 24,
+                      textAnchor: mod.UIAnchor.Center,
+                      padding: 0,
+                      bgColor: [0.2, 0.2, 0.2],
+                      bgAlpha: 1,
+                      bgFill: mod.UIBgFill.None,
+                      imageType: mod.UIImageType.None,
+                      imageColor: [1, 1, 1],
+                      imageAlpha: 1,
+                      buttonEnabled: false
+                    }
+                  ]
+                },
+                {
+                  type: "Container",
+                  name: "Container_BotOptions",
+                  position: [-14.87, 0],
+                  size: [360.52, 520.8765],
+                  anchor: mod.UIAnchor.CenterRight,
+                  visible: true,
+                  textLabel: "",
+                  textColor: [1, 1, 1],
+                  textAlpha: 1,
+                  textSize: 24,
+                  textAnchor: mod.UIAnchor.Center,
+                  padding: 0,
+                  bgColor: [0.0314, 0.0431, 0.0431],
+                  bgAlpha: 1,
+                  bgFill: mod.UIBgFill.Blur,
+                  imageType: mod.UIImageType.None,
+                  imageColor: [1, 1, 1],
+                  imageAlpha: 1,
+                  buttonEnabled: false,
+                  children: [
+                    {
+                      type: "Button",
+                      name: "Button_SS7UK",
+                      position: [0, 10],
+                      size: [180, 40],
+                      anchor: mod.UIAnchor.TopLeft,
+                      visible: true,
+                      textLabel: "SPAWN SEAL",
+                      textColor: [1, 1, 1],
+                      textAlpha: 1,
+                      textSize: 24,
+                      textAnchor: mod.UIAnchor.Center,
+                      padding: 0,
+                      bgColor: [0.2, 0.2, 0.2],
+                      bgAlpha: 1,
+                      bgFill: mod.UIBgFill.Solid,
+                      imageType: mod.UIImageType.None,
+                      imageColor: [1, 1, 1],
+                      imageAlpha: 1,
+                      buttonEnabled: false
+                    },
+                    {
+                      type: "Button",
+                      name: "Button_YKNIC",
+                      position: [0, 55],
+                      size: [180, 40],
+                      anchor: mod.UIAnchor.TopRight,
+                      visible: true,
+                      textLabel: "DELETE MERC",
+                      textColor: [1, 1, 1],
+                      textAlpha: 1,
+                      textSize: 24,
+                      textAnchor: mod.UIAnchor.Center,
+                      padding: 0,
+                      bgColor: [0.2, 0.2, 0.2],
+                      bgAlpha: 1,
+                      bgFill: mod.UIBgFill.Solid,
+                      imageType: mod.UIImageType.None,
+                      imageColor: [1, 1, 1],
+                      imageAlpha: 1,
+                      buttonEnabled: false
+                    },
+                    {
+                      type: "Button",
+                      name: "Button_UJ9KB",
+                      position: [0, 10],
+                      size: [180, 40],
+                      anchor: mod.UIAnchor.TopRight,
+                      visible: true,
+                      textLabel: "SPAWN MERC",
+                      textColor: [1, 1, 1],
+                      textAlpha: 1,
+                      textSize: 24,
+                      textAnchor: mod.UIAnchor.Center,
+                      padding: 0,
+                      bgColor: [0.2, 0.2, 0.2],
+                      bgAlpha: 1,
+                      bgFill: mod.UIBgFill.Solid,
+                      imageType: mod.UIImageType.None,
+                      imageColor: [1, 1, 1],
+                      imageAlpha: 1,
+                      buttonEnabled: false
+                    },
+                    {
+                      type: "Button",
+                      name: "Button_JE5CW",
+                      position: [0, 55],
+                      size: [180, 40],
+                      anchor: mod.UIAnchor.TopLeft,
+                      visible: true,
+                      textLabel: "DELETE SEAL",
+                      textColor: [1, 1, 1],
+                      textAlpha: 1,
+                      textSize: 24,
+                      textAnchor: mod.UIAnchor.Center,
+                      padding: 0,
+                      bgColor: [0.2, 0.2, 0.2],
+                      bgAlpha: 1,
+                      bgFill: mod.UIBgFill.Solid,
+                      imageType: mod.UIImageType.None,
+                      imageColor: [1, 1, 1],
+                      imageAlpha: 1,
+                      buttonEnabled: false
+                    },
+                    {
+                      type: "Container",
+                      name: "Container_QWDSS",
+                      position: [0, 99.93],
+                      size: [347, 302.71],
+                      anchor: mod.UIAnchor.Center,
+                      visible: true,
+                      textLabel: "",
+                      textColor: [1, 1, 1],
+                      textAlpha: 1,
+                      textSize: 24,
+                      textAnchor: mod.UIAnchor.Center,
+                      padding: 0,
+                      bgColor: [0.2, 0.2, 0.2],
+                      bgAlpha: 1,
+                      bgFill: mod.UIBgFill.OutlineThin,
+                      imageType: mod.UIImageType.None,
+                      imageColor: [1, 1, 1],
+                      imageAlpha: 1,
+                      buttonEnabled: false,
+                      children: [
+                        {
+                          type: "Container",
+                          name: "Container_Bot_Attack_Options",
+                          position: [0, 100],
+                          size: [90, 50],
+                          anchor: mod.UIAnchor.TopLeft,
+                          visible: true,
+                          textLabel: "",
+                          textColor: [1, 1, 1],
+                          textAlpha: 1,
+                          textSize: 24,
+                          textAnchor: mod.UIAnchor.Center,
+                          padding: 0,
+                          bgColor: [0.2, 0.2, 0.2],
+                          bgAlpha: 1,
+                          bgFill: mod.UIBgFill.Blur,
+                          imageType: mod.UIImageType.None,
+                          imageColor: [1, 1, 1],
+                          imageAlpha: 1,
+                          buttonEnabled: false,
+                          children: [
+                            {
+                              type: "Button",
+                              name: "Button_Bot_Attack_On",
+                              position: [-20, 0],
+                              size: [40, 30],
+                              anchor: mod.UIAnchor.Center,
+                              visible: true,
+                              textLabel: "ON",
+                              textColor: [1, 1, 1],
+                              textAlpha: 1,
+                              textSize: 20,
+                              textAnchor: mod.UIAnchor.Center,
+                              padding: 0,
+                              bgColor: [0.2, 0.2, 0.2],
+                              bgAlpha: 1,
+                              bgFill: mod.UIBgFill.None,
+                              imageType: mod.UIImageType.None,
+                              imageColor: [1, 1, 1],
+                              imageAlpha: 1,
+                              buttonEnabled: false
+                            },
+                            {
+                              type: "Button",
+                              name: "Button_Bot_Attack_Off",
+                              position: [20, 0],
+                              size: [40, 30],
+                              anchor: mod.UIAnchor.Center,
+                              visible: true,
+                              textLabel: "OFF",
+                              textColor: [1, 1, 1],
+                              textAlpha: 1,
+                              textSize: 20,
+                              textAnchor: mod.UIAnchor.Center,
+                              padding: 0,
+                              bgColor: [0.2, 0.2, 0.2],
+                              bgAlpha: 1,
+                              bgFill: mod.UIBgFill.None,
+                              imageType: mod.UIImageType.None,
+                              imageColor: [1, 1, 1],
+                              imageAlpha: 1,
+                              buttonEnabled: false
+                            }
+                          ]
+                        },
+                        {
+                          type: "Container",
+                          name: "Container_Bot_Idle_Options",
+                          position: [0, 50],
+                          size: [90, 50],
+                          anchor: mod.UIAnchor.TopLeft,
+                          visible: true,
+                          textLabel: "",
+                          textColor: [1, 1, 1],
+                          textAlpha: 1,
+                          textSize: 24,
+                          textAnchor: mod.UIAnchor.Center,
+                          padding: 0,
+                          bgColor: [0.2, 0.2, 0.2],
+                          bgAlpha: 1,
+                          bgFill: mod.UIBgFill.Blur,
+                          imageType: mod.UIImageType.None,
+                          imageColor: [1, 1, 1],
+                          imageAlpha: 1,
+                          buttonEnabled: false,
+                          children: [
+                            {
+                              type: "Button",
+                              name: "Button_Bot_Idle_Off",
+                              position: [-20, 0],
+                              size: [40, 30],
+                              anchor: mod.UIAnchor.Center,
+                              visible: true,
+                              textLabel: "ON",
+                              textColor: [1, 1, 1],
+                              textAlpha: 1,
+                              textSize: 20,
+                              textAnchor: mod.UIAnchor.Center,
+                              padding: 0,
+                              bgColor: [0.2, 0.2, 0.2],
+                              bgAlpha: 1,
+                              bgFill: mod.UIBgFill.None,
+                              imageType: mod.UIImageType.None,
+                              imageColor: [1, 1, 1],
+                              imageAlpha: 1,
+                              buttonEnabled: false
+                            },
+                            {
+                              type: "Button",
+                              name: "Button_Bot_Idle_Off",
+                              position: [20, 0],
+                              size: [40, 30],
+                              anchor: mod.UIAnchor.Center,
+                              visible: true,
+                              textLabel: "OFF",
+                              textColor: [1, 1, 1],
+                              textAlpha: 1,
+                              textSize: 20,
+                              textAnchor: mod.UIAnchor.Center,
+                              padding: 0,
+                              bgColor: [0.2, 0.2, 0.2],
+                              bgAlpha: 1,
+                              bgFill: mod.UIBgFill.None,
+                              imageType: mod.UIImageType.None,
+                              imageColor: [1, 1, 1],
+                              imageAlpha: 1,
+                              buttonEnabled: false
+                            }
+                          ]
+                        },
+                        {
+                          type: "Text",
+                          name: "Text_OI6Y7",
+                          position: [0, 50],
+                          size: [100, 50],
+                          anchor: mod.UIAnchor.TopRight,
+                          visible: true,
+                          textLabel: mod.stringkeys.Text_OI6Y7,
+                          textColor: [1, 1, 1],
+                          textAlpha: 1,
+                          textSize: 24,
+                          textAnchor: mod.UIAnchor.Center,
+                          padding: 0,
+                          bgColor: [0.2, 0.2, 0.2],
+                          bgAlpha: 1,
+                          bgFill: mod.UIBgFill.None,
+                          imageType: mod.UIImageType.None,
+                          imageColor: [1, 1, 1],
+                          imageAlpha: 1,
+                          buttonEnabled: false
+                        },
+                        {
+                          type: "Text",
+                          name: "Text_SKTO8",
+                          position: [0, 100],
+                          size: [100, 50],
+                          anchor: mod.UIAnchor.TopRight,
+                          visible: true,
+                          textLabel: mod.stringkeys.Text_SKTO8,
+                          textColor: [1, 1, 1],
+                          textAlpha: 1,
+                          textSize: 24,
+                          textAnchor: mod.UIAnchor.Center,
+                          padding: 0,
+                          bgColor: [0.2, 0.2, 0.2],
+                          bgAlpha: 1,
+                          bgFill: mod.UIBgFill.None,
+                          imageType: mod.UIImageType.None,
+                          imageColor: [1, 1, 1],
+                          imageAlpha: 1,
+                          buttonEnabled: false
+                        },
+                        {
+                          type: "Container",
+                          name: "Container_Bot_TeamSelect",
+                          position: [-1.14, 0],
+                          size: [349.29, 50],
+                          anchor: mod.UIAnchor.TopCenter,
+                          visible: true,
+                          textLabel: "",
+                          textColor: [1, 1, 1],
+                          textAlpha: 1,
+                          textSize: 24,
+                          textAnchor: mod.UIAnchor.Center,
+                          padding: 0,
+                          bgColor: [0.2, 0.2, 0.2],
+                          bgAlpha: 1,
+                          bgFill: mod.UIBgFill.GradientTop,
+                          imageType: mod.UIImageType.None,
+                          imageColor: [1, 1, 1],
+                          imageAlpha: 1,
+                          buttonEnabled: false,
+                          children: [
+                            {
+                              type: "Button",
+                              name: "Button_Bot_TeamSelect_Seals",
+                              position: [-100, 0],
+                              size: [100, 40],
+                              anchor: mod.UIAnchor.Center,
+                              visible: true,
+                              textLabel: "SEALs",
+                              textColor: [1, 1, 1],
+                              textAlpha: 1,
+                              textSize: 24,
+                              textAnchor: mod.UIAnchor.Center,
+                              padding: 0,
+                              bgColor: [0.2, 0.2, 0.2],
+                              bgAlpha: 1,
+                              bgFill: mod.UIBgFill.None,
+                              imageType: mod.UIImageType.None,
+                              imageColor: [1, 1, 1],
+                              imageAlpha: 1,
+                              buttonEnabled: false
+                            },
+                            {
+                              type: "Button",
+                              name: "Button_Bot_TeamSelect_Mercs",
+                              position: [0, 0],
+                              size: [100, 40],
+                              anchor: mod.UIAnchor.Center,
+                              visible: true,
+                              textLabel: "MERCS",
+                              textColor: [1, 1, 1],
+                              textAlpha: 1,
+                              textSize: 24,
+                              textAnchor: mod.UIAnchor.Center,
+                              padding: 0,
+                              bgColor: [0.2, 0.2, 0.2],
+                              bgAlpha: 1,
+                              bgFill: mod.UIBgFill.None,
+                              imageType: mod.UIImageType.None,
+                              imageColor: [1, 1, 1],
+                              imageAlpha: 1,
+                              buttonEnabled: false
+                            },
+                            {
+                              type: "Button",
+                              name: "Button_Bot_TeamSelect_All",
+                              position: [100, 0],
+                              size: [100, 40],
+                              anchor: mod.UIAnchor.Center,
+                              visible: true,
+                              textLabel: "ALL",
+                              textColor: [1, 1, 1],
+                              textAlpha: 1,
+                              textSize: 24,
+                              textAnchor: mod.UIAnchor.Center,
+                              padding: 0,
+                              bgColor: [0.2, 0.2, 0.2],
+                              bgAlpha: 1,
+                              bgFill: mod.UIBgFill.None,
+                              imageType: mod.UIImageType.None,
+                              imageColor: [1, 1, 1],
+                              imageAlpha: 1,
+                              buttonEnabled: false
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  type: "Container",
+                  name: "Container_WeaponOptions",
+                  position: [-198.97, -19.56],
+                  size: [370.7965, 146.05],
+                  anchor: mod.UIAnchor.BottomCenter,
+                  visible: true,
+                  textLabel: "",
+                  textColor: [1, 1, 1],
+                  textAlpha: 1,
+                  textSize: 24,
+                  textAnchor: mod.UIAnchor.Center,
+                  padding: 0,
+                  bgColor: [0.0314, 0.0431, 0.0431],
+                  bgAlpha: 1,
+                  bgFill: mod.UIBgFill.Blur,
+                  imageType: mod.UIImageType.None,
+                  imageColor: [1, 1, 1],
+                  imageAlpha: 1,
+                  buttonEnabled: false
                 }
+              ]
             }
-            else
-                mod.SetUITextLabel(timeText, mod.Message(timeString));
-            
-            // Change color based on time remaining (only during active rounds)
-            if (matchData.state === GameState.RoundActive) {
-                let timeLeft = matchData.roundTime;
-                if (timeLeft <= 30) {
-                    // Red for last 30 seconds
-                    mod.SetUITextColor(timeText, mod.CreateVector(1, 0.2, 0.2));
-                } else if (timeLeft <= 60) {
-                    // Yellow for last minute
-                    mod.SetUITextColor(timeText, mod.CreateVector(1, 1, 0.2));
-                } else {
-                    // White for normal time
-                    mod.SetUITextColor(timeText, mod.CreateVector(1, 1, 1));
-                }
-            } else {
-                // Default white for other states
-                mod.SetUITextColor(timeText, mod.CreateVector(1, 1, 1));
-            }
+          ]
         }
-
-        // Update widget visibility based on game state
-        let shouldShow = matchData.isGamePlayActive() && showTimeWidget;
-        if (widget) {
-            mod.SetUIWidgetVisible(widget, shouldShow);
-        }
-    }
-
-    // Show/hide the score widget
-    export function setScoreWidgetVisible(visible: boolean): void {
-        if (widget) {
-            mod.SetUIWidgetVisible(widget, visible);
-        }
+        );
     }
 }
 
-const log = new Logging.Logger(Logging.LogLevel.Debug, 10, 10); // LogLevel, max visible messages, cleanup time in seconds
+export namespace Utility {
+
+    export class Input
+    {
+        private zoomTimes: number[] = [];
+        private lastPatternTime: number = 0;
+
+        public msDoubleTap = 600;       // double tap time window
+        public msCooldown = 1000;       // cooldown time window
+        public msExpire = 2000;         // expiration time window
+        
+        public msTripleTap = 500;       // triple tap time window
+        public msLongHoldTime = 1500;   // long hold time window
+
+        /* detect double tap input via zoom communication - returns true if double tap detected, false otherwise */
+        dtcInput(player: mod.Player, state: mod.SoldierStateBool): boolean;
+        dtcInput(player: mod.Player, state: boolean): boolean;
+        dtcInput(player: mod.Player, state: mod.SoldierStateBool | boolean): boolean
+        {
+            const currentTime = Date.now();
+
+            // get player ID
+            const playerID = mod.GetObjId(player);
+            if (playerID === -1)
+                return false;
+
+            // Handle different parameter types
+            let actualState: boolean;
+            if (typeof state === 'boolean') {
+                actualState = state;
+            } else {
+                // state is mod.SoldierStateBool - get the actual boolean value
+                actualState = mod.GetSoldierState(player, state);
+            }
+
+            // Only process when state is true (event triggered)
+            if (!actualState)
+                return false;
+
+            // Clean up old zoom events & add latest
+            this.zoomTimes = this.zoomTimes.filter(time => currentTime - time < this.msExpire);
+            this.zoomTimes.push(currentTime);
+
+            // wait 1 second between changing states
+            if (currentTime - this.lastPatternTime < this.msCooldown)
+                return false;
+
+            // Need at least 2 quick zooms to trigger shoulder switch
+            if (this.zoomTimes.length <= 1)
+                return false;
+
+            const timeBetween = this.zoomTimes[this.zoomTimes.length - 1] - this.zoomTimes[this.zoomTimes.length - 2];
+
+            // Double-tap detected
+            if (timeBetween > this.msDoubleTap)
+                return false;
+
+            this.lastPatternTime = currentTime;
+            this.zoomTimes = []; // Clear pattern buffer
+            console.log(`Player ${playerID}: handled input via ${typeof state === 'boolean' ? 'boolean' : state} communication`);
+            return true;
+        }
+    }
+}
