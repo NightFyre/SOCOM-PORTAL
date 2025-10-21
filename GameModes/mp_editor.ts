@@ -16,6 +16,12 @@ export function OnPlayerDeployed(eventPlayer: mod.Player): void
     SOCOM.CZGame.OnPlayerDeploy(eventPlayer);
 }
 
+// This will trigger when an AISpawner spawns an AI Soldier.
+export function OnSpawnerSpawned(eventPlayer: mod.Player, eventSpawner: mod.Spawner): void
+{
+    SOCOM.CZGame.OnSpawnBot(eventPlayer, eventSpawner);
+}
+
 // This will trigger when the Player dies and returns to the deploy screen.
 export function OnPlayerUndeploy(eventPlayer: mod.Player): void 
 { 
@@ -47,6 +53,11 @@ export function OnPlayerUIButtonEvent(player: mod.Player, widget: mod.UIWidget, 
 // https://github.com/xCENTx/SOCOM-PORTAL
 export namespace SOCOM {
 
+    export enum SoldierTeam {
+        SEALs = 1, 
+        MERCs = 2
+    }
+
     export enum SoldierCameraView {
         RightShoulder,
         LeftShoulder
@@ -66,6 +77,7 @@ export namespace SOCOM {
         static gameTime: number = 0; // total accumulated game time in seconds
         static clients: number = 0; // current number of players / bots connected
         static bots: number = 0; // current number of clients that are bots
+        static botSpawners: mod.Spawner[] = []; // list of bot spawners in the map
 
         static sealObjects: mod.Player[] = [];
         
@@ -127,6 +139,8 @@ export namespace SOCOM {
         {
             console.log("CZGame OnGameModeStarted");
 
+            this.botSpawners = [mod.GetSpawner(10), mod.GetSpawner(11)]; // get bot spawners for each team
+
             // Initialize the game when first player joins (will be handled in OnPlayerJoined)
             while (CZGame.state != GameState.GameEnd)
             {
@@ -181,6 +195,17 @@ export namespace SOCOM {
             console.log(`Player Deployed: ID ${seal.playerID} | TeamID: ${seal.teamID} | isAI: ${seal.isAI}`);
         }
 
+        static OnSpawnBot(eventPlayer: mod.Player, eventSpawner: mod.Spawner): void
+        {
+            let seal = CZSeal.get(eventPlayer);
+            if (!seal)
+                return;
+
+            this.bots++;
+            mod.AIIdleBehavior(seal.player); // set default AI behavior
+            console.log(`Bot Spawned: ID ${seal.playerID} | TeamID: ${seal.teamID}`);
+        }
+
         static OnPlayerUndeploy(eventPlayer: mod.Player): void
         {
             let seal = CZSeal.get(eventPlayer);
@@ -188,6 +213,29 @@ export namespace SOCOM {
                 return;
             
             console.log(`Player Undeployed: ID ${seal.playerID} | TeamID: ${seal.teamID} | isAI: ${seal.isAI}`);
+        }
+
+        static SpawnAI(teamID: number): void
+        {
+            if (teamID < 1 || teamID > 2)
+                return;
+
+            /* get spawner for team */
+            const spawner = this.botSpawners[teamID - 1];
+
+            /* get a random number between 0 - 3 for AI class */
+            const aiClassIndex = Math.floor(Math.random() * 4);
+            let aiClass: mod.SoldierClass;
+            switch (aiClassIndex) {
+                case 0: aiClass = mod.SoldierClass.Assault; break;
+                case 1: aiClass = mod.SoldierClass.Engineer; break;
+                case 2: aiClass = mod.SoldierClass.Support; break;
+                case 3: aiClass = mod.SoldierClass.Recon; break;
+                default: aiClass = mod.SoldierClass.Assault; break;
+            }
+
+            /* spawn AI from spawner with specified class and team */
+            mod.SpawnAIFromAISpawner(spawner, aiClass, mod.GetTeam(teamID));
         }
     }
 
@@ -200,7 +248,7 @@ export namespace SOCOM {
         cameraView: SoldierCameraView = SoldierCameraView.RightShoulder; // current camera view mode
 
         // zoom pattern detection for shoulder switching
-        private inputDetector = new CZInput();
+        private inputDetector = new Utility.Input();
 
         // static list of all player instances
         static sealObjects: mod.Player[] = [];
@@ -295,68 +343,6 @@ export namespace SOCOM {
             this.cameraView = this.cameraView === SoldierCameraView.RightShoulder ? 
                 SoldierCameraView.LeftShoulder : 
                 SoldierCameraView.RightShoulder;
-        }
-    }
-
-    export class CZInput {
-        private zoomTimes: number[] = [];
-        private lastPatternTime: number = 0;
-
-        public msDoubleTap = 600;       // double tap time window
-        public msTripleTap = 500;       // triple tap time window
-        public msLongHoldTime = 1500;   // long hold time window
-        public msCooldown = 1000;       // cooldown time window
-        public msExpire = 2000;         // expiration time window
-
-        /* detect double tap input via zoom communication - returns true if double tap detected, false otherwise */
-        dtcInput(player: mod.Player, state: mod.SoldierStateBool): boolean;
-        dtcInput(player: mod.Player, state: boolean): boolean;
-        dtcInput(player: mod.Player, state: mod.SoldierStateBool | boolean): boolean
-        {
-            const currentTime = Date.now();
-
-            // get player ID
-            const playerID = mod.GetObjId(player);
-            if (playerID === -1)
-                return false;
-
-            // Handle different parameter types
-            let actualState: boolean;
-            if (typeof state === 'boolean') {
-                actualState = state;
-            } else {
-                // state is mod.SoldierStateBool - get the actual boolean value
-                actualState = mod.GetSoldierState(player, state);
-            }
-
-            // Only process when state is true (event triggered)
-            if (!actualState)
-                return false;
-
-            // Clean up old zoom events & add latest
-            this.zoomTimes = this.zoomTimes.filter(time => currentTime - time < this.msExpire);
-            this.zoomTimes.push(currentTime);
-
-            // wait 1 second between changing states
-            if (currentTime - this.lastPatternTime < this.msCooldown)
-                return false;
-
-            // Need at least 2 quick zooms to trigger shoulder switch
-            if (this.zoomTimes.length <= 1)
-                return false;
-
-            const timeBetween = this.zoomTimes[this.zoomTimes.length - 1] - this.zoomTimes[this.zoomTimes.length - 2];
-
-            // Double-tap detected (within 600ms)
-            if (timeBetween > this.msDoubleTap)
-                return false;
-
-            //  this.switchShoulderView();
-            this.lastPatternTime = currentTime;
-            this.zoomTimes = []; // Clear pattern buffer
-            console.log(`Player ${playerID}: detected double-tap input via ${typeof state === 'boolean' ? 'boolean' : state} communication`);
-
-            return true;
         }
     }
 }
@@ -577,5 +563,69 @@ export namespace Logging {
         return widget;
     }
 }
-
 const log = new Logging.Logger(Logging.LogLevel.Debug, 10, 10); // LogLevel, max visible messages, cleanup time in seconds
+
+export namespace Utility {
+
+    export class Input
+    {
+        private zoomTimes: number[] = [];
+        private lastPatternTime: number = 0;
+
+        public msDoubleTap = 600;       // double tap time window
+        public msCooldown = 1000;       // cooldown time window
+        public msExpire = 2000;         // expiration time window
+        
+        public msTripleTap = 500;       // triple tap time window
+        public msLongHoldTime = 1500;   // long hold time window
+
+        /* detect double tap input via zoom communication - returns true if double tap detected, false otherwise */
+        dtcInput(player: mod.Player, state: mod.SoldierStateBool): boolean;
+        dtcInput(player: mod.Player, state: boolean): boolean;
+        dtcInput(player: mod.Player, state: mod.SoldierStateBool | boolean): boolean
+        {
+            const currentTime = Date.now();
+
+            // get player ID
+            const playerID = mod.GetObjId(player);
+            if (playerID === -1)
+                return false;
+
+            // Handle different parameter types
+            let actualState: boolean;
+            if (typeof state === 'boolean') {
+                actualState = state;
+            } else {
+                // state is mod.SoldierStateBool - get the actual boolean value
+                actualState = mod.GetSoldierState(player, state);
+            }
+
+            // Only process when state is true (event triggered)
+            if (!actualState)
+                return false;
+
+            // Clean up old zoom events & add latest
+            this.zoomTimes = this.zoomTimes.filter(time => currentTime - time < this.msExpire);
+            this.zoomTimes.push(currentTime);
+
+            // wait 1 second between changing states
+            if (currentTime - this.lastPatternTime < this.msCooldown)
+                return false;
+
+            // Need at least 2 quick zooms to trigger shoulder switch
+            if (this.zoomTimes.length <= 1)
+                return false;
+
+            const timeBetween = this.zoomTimes[this.zoomTimes.length - 1] - this.zoomTimes[this.zoomTimes.length - 2];
+
+            // Double-tap detected
+            if (timeBetween > this.msDoubleTap)
+                return false;
+
+            this.lastPatternTime = currentTime;
+            this.zoomTimes = []; // Clear pattern buffer
+            console.log(`Player ${playerID}: handled input via ${typeof state === 'boolean' ? 'boolean' : state} communication`);
+            return true;
+        }
+    }
+}
