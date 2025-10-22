@@ -133,7 +133,7 @@ let shouldExitLoop = false;
 // Triggered on main gamemode start/end. Useful for game start setup and cleanup.
 export async function OnGameModeStarted() 
 {
-    log.info(mod.Message("SOCOM PORTAL - Suppression Game Mode Started"));
+    log.info(mod.Message("SOCOM IN BATTLEFIELD - SUPPRESSION"));
 
     /* Initialize UI widgets */
     UI.RoundInfoWidget.init();
@@ -141,12 +141,16 @@ export async function OnGameModeStarted()
     /* create match data instance */
     let matchData = CZMatchData.get();
 
-    const deployCam = mod.GetSpatialObject(1003);
-    if (mod.GetObjId(deployCam) === 1003)
-    {
-        mod.SetObjectTransform(deployCam, mod.CreateTransform(mod.CreateVector(0,0,-100), mod.CreateVector(0,90,0)));
-        console.log("found deploy cam , resetting transform");
-    }
+    /* set default camera for all players to third person */
+    mod.SetCameraTypeForAll(mod.Cameras.ThirdPerson, 0);
+
+    /// @BUG: deployed camera is offset incorrectly , reset its transform
+    //  const deployCam = mod.GetSpatialObject(1003);
+    //  if (mod.GetObjId(deployCam) === 1003)
+    //  {
+    //      mod.SetObjectTransform(deployCam, mod.CreateTransform(mod.CreateVector(0,0,-100), mod.CreateVector(0,90,0)));
+    //      console.log("found deploy cam , resetting transform");
+    //  }
 
     // setup world icons
     for (let i = 0; i < 16; i++)
@@ -188,7 +192,7 @@ export function OnGameModeEnding(): void
     //}
     //CZSeal.sealObjects = []; // clear the seal objects array  
 
-    log.info(mod.Message("SOCOM PORTAL - Suppression Game Mode Ended"));
+    //  log.info(mod.Message("SOCOM PORTAL - Suppression Game Mode Ended"));
 }
 
 export function OngoingGlobal(): void 
@@ -198,8 +202,6 @@ export function OngoingGlobal(): void
     let matchData = CZMatchData.get();
     if (!matchData)
         return; // invalid match data object
-
-    matchData.updateTags();
 
     // Update score widget UI
     UI.RoundInfoWidget.update();
@@ -213,6 +215,9 @@ export function OngoingGlobal(): void
 
         /* update camera state */
         seal.CameraUpdate(); // update camera state if alive and not AI
+        
+        /* update name tag */
+        seal.IconUpdate();
     }
 }
 
@@ -220,19 +225,17 @@ export function OngoingGlobal(): void
 
 
 
-export enum SoldierCameraView
-{
-    RightShoulder,
-    LeftShoulder
-}
 
 class CZSealStats
 {
+    score: number[] = [0, 0]; // current round score , total score
     kills: number[] = [0, 0]; // number of kills
     assists: number[] = [0, 0]; // number of assists
     deaths: number[] = [0, 0]; // number of times died
     headshots: number[] = [0, 0]; // number of headshots
     headshotKills: number[] = [0, 0]; // number of headshot kills
+    damageDealt: number[] = [0, 0]; // total damage dealt
+    damageTaken: number[] = [0, 0]; // total damage taken
     shotsHit: number[] = [0, 0]; // shots that hit an enemy
     shotsOnFriendly: number[] = [0, 0]; // shots that hit a friendly
     shotsTaken: number[] = [0, 0]; // times shot
@@ -243,6 +246,8 @@ class CZSealStats
     // Reset round stats
     resetRound(): void
     {
+        this.score[1] += this.score[0];
+        this.score[0] = 0; // reset round stats
         this.kills[1] += this.kills[0];
         this.kills[0] = 0; // reset round stats
         this.assists[1] += this.assists[0];
@@ -253,6 +258,8 @@ class CZSealStats
         this.headshots[0] = 0; // reset round stats
         this.headshotKills[1] += this.headshotKills[0];
         this.headshotKills[0] = 0; // reset round stats
+        this.damageDealt[1] += this.damageDealt[0];
+        this.damageDealt[0] = 0; // reset round stats
         this.shotsHit[1] += this.shotsHit[0];
         this.shotsHit[0] = 0; // reset round stats
         this.shotsOnFriendly[1] += this.shotsOnFriendly[0];
@@ -269,11 +276,14 @@ class CZSealStats
 
     reset(): void
     {
+        this.score = [0, 0];
         this.kills = [0, 0];
         this.assists = [0, 0];
         this.deaths = [0, 0];
         this.headshots = [0, 0];
         this.headshotKills = [0, 0];
+        this.damageDealt = [0, 0];
+        this.damageTaken = [0, 0];
         this.shotsHit = [0, 0];
         this.shotsOnFriendly = [0, 0];
         this.shotsTaken = [0, 0];
@@ -281,6 +291,12 @@ class CZSealStats
         this.friendlyFireDeaths = [0, 0];
         this.friendlyFireKills = [0, 0];
     }
+}
+
+export enum SoldierCameraView
+{
+    RightShoulder,
+    LeftShoulder
 }
 
 class CZSeal 
@@ -299,6 +315,8 @@ class CZSeal
     isZooming: boolean = false;
     isArmed: boolean = true;
     isAdmin: boolean = false; // Track if this player is an admin
+    isRemovedFromRound: boolean = false; // Track if this player has been removed from the round due to excessive friendly fire
+    isRemovedFromMatch: boolean = false; // Track if this player has been removed from the match due to excessive friendly fire
     cameraView: SoldierCameraView = SoldierCameraView.RightShoulder; // current camera view mode
 
     // zoom pattern detection for shoulder switching
@@ -407,6 +425,14 @@ class CZSeal
         mod.SetCameraTypeForPlayer(this.player, this.isZooming ? mod.Cameras.FirstPerson : mod.Cameras.ThirdPerson, currentShoulder);
     }
 
+    /* update the player name tag icon - team, position, and text. does not update the icon visibility state */
+    IconUpdate(): void
+    {
+        mod.SetWorldIconOwner(this.teamIcon, this.playerTeam);
+        mod.SetWorldIconPosition(this.teamIcon, mod.GetSoldierState(this.player, mod.SoldierStateVector.GetPosition));
+        mod.SetWorldIconText(this.teamIcon, mod.Message("{}", this.player));
+    }
+
     /* switch between left and right shoulder view */
     private switchShoulderView(): void
     {
@@ -427,7 +453,7 @@ class CZSeal
 
         this.stats.assists[0]++;
         console.log(`Player ${this.playerID} earned an assist on Player ${victim.playerID}`);
-        // mod.DisplayHighlightedWorldLogMessage(mod.Message("elimination assist"), this.player);
+        mod.DisplayHighlightedWorldLogMessage(mod.Message("elimination assist"), this.player);
     }
 
     /* triggered when the player is damaged */
@@ -458,13 +484,15 @@ class CZSeal
             shooter.stats.shotsOnFriendly[0]++; // increment shots on friendly count
             this.stats.shotsTakenByFriendly[0]++; // increment shots taken by friendly count
             console.log(`Player ${shooter.playerID} hit friendly Player ${this.playerID}`);
+            mod.DisplayHighlightedWorldLogMessage(mod.Message("FRIENDLY FIRE!"), shooter.player); // warn player about friendly fire
 
             /* HANDLE EXCESSIVE FRIENDLY FIRE */
-            if (shooter.stats.shotsOnFriendly[0] > 5 && shooter.stats.friendlyFireKills[0] >= 2)
+            let totalShotsOnFriendly = shooter.stats.shotsOnFriendly[0] + shooter.stats.shotsOnFriendly[1];
+            if (totalShotsOnFriendly > 5)
             {
-                mod.Heal(this.player, this.maxHealth * 0.25); // heal the victim for 25% of max health
-                shooter.Disarm(); // disarm the shooter , prvents further friendly fire & exploiting the health system
-                console.log(`Player ${shooter.playerID} penalized for excessive friendly fire`);
+                //  mod.Heal(this.player, damageReceived); // heal the victim
+                mod.DealDamage(shooter.player, damageReceived); // deal damage back to the shooter
+                console.log(`Player ${shooter.playerID} penalized with ${damageReceived.toFixed(1)} damage for excessive friendly fire`);
             }
 
             return; // don't count friendly fire as a hit
@@ -472,7 +500,9 @@ class CZSeal
 
         /* update stats */
         this.stats.shotsTaken[0]++; // increment shots taken count
+        this.stats.damageTaken[0] += damageReceived; // increment damage taken
         shooter.stats.shotsHit[0]++; // increment shots hit count
+        shooter.stats.damageDealt[0] += damageReceived; // increment damage dealt
         if (mod.EventDamageTypeCompare(eventDamageType, mod.PlayerDamageTypes.Headshot))
             shooter.stats.headshots[0]++; // increment headshot count if headshot
 
@@ -518,7 +548,8 @@ class CZSeal
             mod.DisplayNotificationMessage(mod.Message("FRIENDLY FIRE WILL NOT BE TOLERATED"), killerSeal.player);
 
             /* HANDLE EXCESSIVE FRIENDLY FIRE */
-            if (killerSeal.stats.friendlyFireKills[0] >= 2)
+            let totalFriendlyFireKills = killerSeal.stats.friendlyFireKills[0] + killerSeal.stats.friendlyFireKills[1];
+            if (totalFriendlyFireKills > 2)
             {
                 mod.Kill(killerSeal.player); // kill the killer for excessive friendly fire
                 console.log(`Player ${killerSeal.playerID} has been removed from the round for excessive friendly fire`);
@@ -534,7 +565,7 @@ class CZSeal
             killerSeal.stats.headshotKills[0]++;
 
         console.log(`Player ${killerSeal.playerID} eliminated Player ${this.playerID}`);
-        log.info(mod.Message("{} eliminated {}", killerSeal.player, this.player));
+        //  log.info(mod.Message("{} eliminated {}", killerSeal.player, this.player));
         // mod.DisplayHighlightedWorldLogMessage(mod.Message("elimination"), killerSeal.player);
     }
 
@@ -694,21 +725,6 @@ class CZMatchData
         await mod.Wait(1); // wait 1 second before next update
     }
 
-    // update the position of player name tags
-    updateTags(): void
-    {
-        for (let player of CZSeal.sealObjects)
-        {
-            let seal = CZSeal.get(player);
-            if (!seal || !seal.isValid())
-                continue;
-            
-            mod.SetWorldIconOwner(seal.teamIcon, seal.playerTeam);
-            mod.SetWorldIconPosition(seal.teamIcon, mod.GetSoldierState(player, mod.SoldierStateVector.GetPosition));
-            mod.SetWorldIconText(seal.teamIcon, mod.Message("{}", seal.player));
-        }
-    }
-
     async updateRound(): Promise<void>
     {
         this.roundTime--;   // decrement round time
@@ -728,6 +744,26 @@ class CZMatchData
         mod.DisplayNotificationMessage(mod.Message("Match starting in 15 seconds..."));
         await mod.Wait(15); // wait 15 seconds before starting the match
 
+        for (let player of CZSeal.sealObjects)
+        {
+            let seal = CZSeal.get(player);
+            if (!seal)
+                continue;
+
+            /* set input restriction for pre-round */
+            if (seal.isAI)
+            {
+                seal.setAIBehavior(false); 
+            }
+            else
+            {
+                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.Jump, true); // ensure jump is disabled
+                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.MoveForwardBack, true); // ensure move forward/back is disabled
+                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.MoveLeftRight, true); // ensure move left/right is disabled
+                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.FireWeapon, true); // ensure weapon firing is disabled
+            }
+        }
+        
         this.roundNum = 0;
         this.scores = [0, 0];
         this.matchTime = 0;
@@ -753,10 +789,10 @@ class CZMatchData
             if (seal.teamID !== 1)
                 continue; // only log team 1 (SEALS) stats for now
             console.log(`Player [${seal.playerID}] Stats: Kills: ${seal.stats.kills[1]}, Deaths: ${seal.stats.deaths[1]}, Headshots: ${seal.stats.headshots[1]}, Headhshot Kills: ${seal.stats.headshotKills[1]}, Shots on Friendly: ${seal.stats.shotsOnFriendly[1]}, Friendly Fire Kills: ${seal.stats.friendlyFireKills[1]}`);
-            log.info(mod.Message("- {} Stats: Kills: {}, Deaths: {}", seal.player, seal.stats.kills[1], seal.stats.deaths[1]));
+            //  log.info(mod.Message("- {} Stats: Kills: {}, Deaths: {}", seal.player, seal.stats.kills[1], seal.stats.deaths[1]));
             seal.stats.reset(); // reset all stats
         }
-        log.info(mod.Message("SEALS Rounds Won: {}", this.scores[0]));
+        //  log.info(mod.Message("SEALS Rounds Won: {}", this.scores[0]));
 
         console.log(`MERCS Rounds Won: ${this.scores[1]}`);
         for (let player of CZSeal.sealObjects)
@@ -767,10 +803,10 @@ class CZMatchData
             if (seal.teamID !== 2)
                 continue; // only log team 2 (MERCS) stats for now
             console.log(`Player [${seal.playerID}] Stats: Kills: ${seal.stats.kills[1]}, Deaths: ${seal.stats.deaths[1]}, Headshots: ${seal.stats.headshots[1]}, Headhshot Kills: ${seal.stats.headshotKills[1]}, Shots on Friendly: ${seal.stats.shotsOnFriendly[1]}, Friendly Fire Kills: ${seal.stats.friendlyFireKills[1]}`);
-            log.info(mod.Message("- {} Stats: Kills: {}, Deaths: {}", seal.player, seal.stats.kills[1], seal.stats.deaths[1]));
+            //  log.info(mod.Message("- {} Stats: Kills: {}, Deaths: {}", seal.player, seal.stats.kills[1], seal.stats.deaths[1]));
             seal.stats.reset(); // reset all stats
         }
-        log.info(mod.Message("MERCS Rounds Won: {}", this.scores[1]));
+        //  log.info(mod.Message("MERCS Rounds Won: {}", this.scores[1]));
 
         await mod.Wait(15); // wait 15 seconds before resetting the match
 
@@ -800,17 +836,28 @@ class CZMatchData
             seal.isZooming = false;
             seal.isArmed = true;
 
+            /* set input restriction for pre-round */
+            if (seal.isAI)
+            {
+                seal.setAIBehavior(false); 
+            }
+            else
+            {
+                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.Jump, true); // ensure jump is disabled
+                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.MoveForwardBack, true); // ensure move forward/back is disabled
+                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.MoveLeftRight, true); // ensure move left/right is disabled
+                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.FireWeapon, true); // ensure weapon firing is disabled
+            }
+
             mod.DeployPlayer(seal.player); // deploy the player
             mod.SetWorldIconOwner(seal.teamIcon, seal.playerTeam);
             mod.EnableWorldIconText(seal.teamIcon, true);
-
-            if (seal.isAI)
-                seal.setAIBehavior(true); // set ai to battlefield behavior
         }
 
         mod.SetSpawnMode(mod.SpawnModes.Deploy); // restore normal spawn mode
 
-        
+        await mod.Wait(5); // wait a few seconds before starting the round
+
         this.startRound(); // start a new round
         
         console.log(`Preparing for Round ${this.roundNum}`);
@@ -818,12 +865,32 @@ class CZMatchData
 
     startRound(): void
     {
+        mod.EnableAllPlayerDeploy(false); // disable redeployment for all players
+        
+        /* disable player input restrictions */
+        for (let player of CZSeal.sealObjects)
+        {
+            let seal = CZSeal.get(player);
+            if (!seal)
+                continue;
+
+            if (seal.isAI)
+            {
+                seal.setAIBehavior(true); // set ai to battlefield behavior
+            }
+            else
+            {
+                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.Jump, false); // ensure jump is enabled
+                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.MoveForwardBack, false); // ensure move forward/back is enabled
+                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.MoveLeftRight, false); // ensure move left/right is enabled
+                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.FireWeapon, false); // ensure weapon firing is enabled
+            }
+        }
+
         this.roundNum++;
         this.roundTime = this.roundTimeMax;
-
-        this.state = GameState.RoundActive;
-        mod.EnableAllPlayerDeploy(false); // disable redeployment for all players
         mod.DisplayNotificationMessage(mod.Message("Round {} of {} started", this.roundNum, this.roundMax));
+        this.state = GameState.RoundActive;
     }
 
     async endRound(winner: number): Promise<void>
@@ -853,6 +920,18 @@ class CZMatchData
                 continue; // only log team 1 (SEALS) stats for now
             console.log(`Player [${seal.playerID}][${seal.getHealthPercent().toFixed(0)}%] Stats: Kills: ${seal.stats.kills[0]}, Deaths: ${seal.stats.deaths[0]}, Headshots: ${seal.stats.headshots[0]}, Headhshot Kills: ${seal.stats.headshotKills[0]}, Shots on Friendly: ${seal.stats.shotsOnFriendly[0]}, Friendly Fire Kills: ${seal.stats.friendlyFireKills[0]}`);
             seal.stats.resetRound(); // reset round stats
+            
+            if (seal.isAI)
+            {
+                seal.setAIBehavior(false); 
+            }
+            else
+            {
+                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.Jump, true); // ensure jump is disabled
+                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.MoveForwardBack, true); // ensure move forward/back is disabled
+                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.MoveLeftRight, true); // ensure move left/right is disabled
+                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.FireWeapon, true); // ensure weapon firing is disabled
+            }
         }
 
         /* log merc stats */
@@ -866,6 +945,18 @@ class CZMatchData
                 continue; // only log team 2 (MERCS) stats for now
             console.log(`Player [${seal.playerID}][${seal.getHealthPercent().toFixed(0)}%] Stats: Kills: ${seal.stats.kills[0]}, Deaths: ${seal.stats.deaths[0]}, Headshots: ${seal.stats.headshots[0]}, Headhshot Kills: ${seal.stats.headshotKills[0]}, Shots on Friendly: ${seal.stats.shotsOnFriendly[0]}, Friendly Fire Kills: ${seal.stats.friendlyFireKills[0]}`);
             seal.stats.resetRound(); // reset round stats
+            
+            if (seal.isAI)
+            {
+                seal.setAIBehavior(false); 
+            }
+            else
+            {
+                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.Jump, true); // ensure jump is disabled
+                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.MoveForwardBack, true); // ensure move forward/back is disabled
+                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.MoveLeftRight, true); // ensure move left/right is disabled
+                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.FireWeapon, true); // ensure weapon firing is disabled
+            }
         }
 
         /* Check for match end */
@@ -908,7 +999,9 @@ class CZMatchData
             console.log(`Player ${seal.playerID} joined during active match , set as dead`);
             return;
         }
-        log.info(mod.Message("{} joined the game", seal.player));
+
+        if (!seal.isAI)
+            log.info(mod.Message("{} joined the game", seal.player, seal.teamID));
     }
 
     /* triggered when a player leaves the game */
@@ -946,10 +1039,8 @@ class CZMatchData
         /* seal already spawned for this round */
         if (seal.hasSpawned)
         {
-            if (seal.isAI)
-                seal.setAIBehavior(false);
-
             seal.Disarm(); // disarm the player to prevent exploits
+            mod.UndeployPlayer(eventPlayer); // undeploy the player
             return; // already spawned
         }
 
@@ -967,8 +1058,6 @@ class CZMatchData
             mod.Wait(1); // wait 1 frame
             mod.SetCameraTypeForPlayer(seal.player, mod.Cameras.ThirdPerson, seal.cameraView === SoldierCameraView.RightShoulder ? 0 : 1);
         }
-        else
-            seal.setAIBehavior(true);
 
         console.log(`Player ${seal.playerID} spawned for team ${seal.teamID} | isAI: ${seal.isAI}`);
     }
@@ -1321,7 +1410,7 @@ export namespace Logging {
             0,
             mod.UIBgFill.Solid,
             message,
-            16, // text size
+            24, // text size
             textColor, // text color
             1, // text alpha
             mod.UIAnchor.CenterLeft
@@ -1342,101 +1431,235 @@ export namespace UI {
 
     export class RoundInfoWidget
     {
-    
         static widget = modlib.ParseUI(
         {
-          type: "Container",
-          name: "Container_Round_Info",
-          //    position: [-10, -250],
-          position: [0, 0],
-          size: [220, 100],
-          anchor: mod.UIAnchor.TopCenter,
-          visible: true,
-          textLabel: "",
-          textColor: [1, 1, 1],
-          textAlpha: 0.5,
-          textSize: 24,
-          textAnchor: mod.UIAnchor.Center,
-          padding: 10,
-          bgColor: [0.1, 0.1, 0.1],
-          bgAlpha: 0.8,
-          bgFill: mod.UIBgFill.Blur,
-          imageType: mod.UIImageType.None,
-          imageColor: [1, 1, 1],
-          imageAlpha: 1,
-          buttonEnabled: false,
-          children: [
+        type: "Container",
+        name: "Container_Round_Info",
+        position: [0, 0],
+        size: [305, 55],
+        anchor: mod.UIAnchor.TopCenter,
+        visible: true,
+        textLabel: "",
+        textColor: [1, 1, 1],
+        textAlpha: 0.5,
+        textSize: 24,
+        textAnchor: mod.UIAnchor.Center,
+        padding: 10,
+        bgColor: [0.2118, 0.2235, 0.2353],
+        bgAlpha: 80,
+        bgFill: mod.UIBgFill.GradientBottom,
+        imageType: mod.UIImageType.None,
+        imageColor: [1, 1, 1],
+        imageAlpha: 1,
+        buttonEnabled: false,
+        children: [
             {
-              type: "Text",
-              name: "Text_Score_SealsRemaining",
-              position: [0, 0],
-              size: [90, 50],
-              anchor: mod.UIAnchor.TopLeft,
-              visible: true,
-              textLabel: "SEALs: 0",
-              textColor: [0.2, 0.6, 1],
-              textAlpha: 1,
-              textSize: 18,
-              textAnchor: mod.UIAnchor.Center,
-              padding: 5,
-              bgColor: [0.1, 0.1, 0.1],
-              bgAlpha: 0,
-              bgFill: mod.UIBgFill.Solid,
-              imageType: mod.UIImageType.None,
-              imageColor: [1, 1, 1],
-              imageAlpha: 1,
-              buttonEnabled: false
+            type: "Container",
+            name: "Container_SealsAlive",
+            position: [-125, 0],
+            size: [50, 50],
+            anchor: mod.UIAnchor.Center,
+            visible: true,
+            textLabel: "",
+            textColor: [1, 1, 1],
+            textAlpha: 1,
+            textSize: 24,
+            textAnchor: mod.UIAnchor.Center,
+            padding: 0,
+            bgColor: [0.2, 0.6, 1],
+            bgAlpha: 0.9,
+            bgFill: mod.UIBgFill.Solid,
+            imageType: mod.UIImageType.None,
+            imageColor: [1, 1, 1],
+            imageAlpha: 1,
+            buttonEnabled: false,
+            children: [
+                {
+                type: "Text",
+                name: "Text_Score_SealsRemaining",
+                position: [0, 0],
+                size: [50, 50],
+                anchor: mod.UIAnchor.Center,
+                visible: true,
+                textLabel: "SEALs: 0",
+                textColor: [0.0314, 0.0431, 0.0431],
+                textAlpha: 0.8,
+                textSize: 18,
+                textAnchor: mod.UIAnchor.Center,
+                padding: 0,
+                bgColor: [0.2, 0.2, 0.2],
+                bgAlpha: 1,
+                bgFill: mod.UIBgFill.None,
+                imageType: mod.UIImageType.None,
+                imageColor: [1, 1, 1],
+                imageAlpha: 1,
+                buttonEnabled: false
+                }
+            ]
             },
             {
-              type: "Text",
-              name: "Text_Score_MercsRemaining",
-              position: [0, 0],
-              size: [90, 50],
-              anchor: mod.UIAnchor.TopRight,
-              visible: true,
-              textLabel: "MERCs: 0",
-              textColor: [1, 0.3, 0.3],
-              textAlpha: 1,
-              textSize: 18,
-              textAnchor: mod.UIAnchor.Center,
-              padding: 5,
-              bgColor: [0.1, 0.1, 0.1],
-              bgAlpha: 0,
-              bgFill: mod.UIBgFill.Solid,
-              imageType: mod.UIImageType.None,
-              imageColor: [1, 1, 1],
-              imageAlpha: 1,
-              buttonEnabled: false
+            type: "Container",
+            name: "Container_MercsAlive",
+            position: [125, 0],
+            size: [50, 50],
+            anchor: mod.UIAnchor.Center,
+            visible: true,
+            textLabel: "",
+            textColor: [1, 1, 1],
+            textAlpha: 1,
+            textSize: 24,
+            textAnchor: mod.UIAnchor.Center,
+            padding: 0,
+            bgColor: [1, 0.302, 0.302],
+            bgAlpha: 0.9,
+            bgFill: mod.UIBgFill.Solid,
+            imageType: mod.UIImageType.None,
+            imageColor: [1, 1, 1],
+            imageAlpha: 1,
+            buttonEnabled: false,
+            children: [
+                {
+                type: "Text",
+                name: "Text_Score_MercsRemaining",
+                position: [0, 0],
+                size: [50, 50],
+                anchor: mod.UIAnchor.Center,
+                visible: true,
+                textLabel: "MERCs: 0",
+                textColor: [0.0314, 0.0431, 0.0431],
+                textAlpha: 0.8,
+                textSize: 18,
+                textAnchor: mod.UIAnchor.Center,
+                padding: 0,
+                bgColor: [0.2, 0.2, 0.2],
+                bgAlpha: 1,
+                bgFill: mod.UIBgFill.None,
+                imageType: mod.UIImageType.None,
+                imageColor: [1, 1, 1],
+                imageAlpha: 1,
+                buttonEnabled: false
+                }
+            ]
             },
             {
-              type: "Text",
-              name: "Text_Score_RoundTime",
-              position: [0, 0],
-              size: [180, 50],
-              anchor: mod.UIAnchor.BottomCenter,
-              visible: true,
-              textLabel: "4:00",
-              textColor: [1, 1, 1],
-              textAlpha: 1,
-              textSize: 22,
-              textAnchor: mod.UIAnchor.Center,
-              padding: 5,
-              bgColor: [0.1, 0.1, 0.1],
-              bgAlpha: 0,
-              bgFill: mod.UIBgFill.Solid,
-              imageType: mod.UIImageType.None,
-              imageColor: [1, 1, 1],
-              imageAlpha: 1,
-              buttonEnabled: false
+            type: "Container",
+            name: "Container_RoundTimer",
+            position: [0, 0],
+            size: [200, 50],
+            anchor: mod.UIAnchor.Center,
+            visible: true,
+            textLabel: "",
+            textColor: [1, 1, 1],
+            textAlpha: 1,
+            textSize: 24,
+            textAnchor: mod.UIAnchor.Center,
+            padding: 0,
+            bgColor: [0.0314, 0.0431, 0.0431],
+            bgAlpha: 0.9,
+            bgFill: mod.UIBgFill.Blur,
+            imageType: mod.UIImageType.None,
+            imageColor: [1, 1, 1],
+            imageAlpha: 1,
+            buttonEnabled: false,
+            children: [
+            {
+            type: "Text",
+            name: "Text_Score_RoundTime",
+            position: [0, 10],
+            size: [100, 20],
+            anchor: mod.UIAnchor.Center,
+            visible: true,
+            textLabel: "4:00",
+            textColor: [1, 1, 1],
+            textAlpha: 1,
+            textSize: 22,
+            textAnchor: mod.UIAnchor.Center,
+            padding: 0,
+            bgColor: [0.2, 0.2, 0.2],
+            bgAlpha: 1,
+            bgFill: mod.UIBgFill.None,
+            imageType: mod.UIImageType.None,
+            imageColor: [1, 1, 1],
+            imageAlpha: 1,
+            buttonEnabled: false
+            },
+            {
+            type: "Text",
+            name: "Text_Score_CurrentRound",
+            position: [0, -15],
+            size: [100, 20],
+            anchor: mod.UIAnchor.Center,
+            visible: true,
+            textLabel: "Round 1",
+            textColor: [1, 1, 1],
+            textAlpha: 1,
+            textSize: 22,
+            textAnchor: mod.UIAnchor.Center,
+            padding: 0,
+            bgColor: [0.2, 0.2, 0.2],
+            bgAlpha: 1,
+            bgFill: mod.UIBgFill.None,
+            imageType: mod.UIImageType.None,
+            imageColor: [1, 1, 1],
+            imageAlpha: 1,
+            buttonEnabled: false
+            },
+            {
+            type: "Text",
+            name: "Text_SealRoundsWon",
+            position: [0, 0],
+                size: [50, 25],
+                anchor: mod.UIAnchor.CenterLeft,
+                visible: true,
+                textLabel: "Seal Rounds: 0",
+                textColor: [1, 1, 1],
+                textAlpha: 1,
+                textSize: 18,
+                textAnchor: mod.UIAnchor.Center,
+                padding: 0,
+                bgColor: [0.2, 0.2, 0.2],
+                bgAlpha: 1,
+                bgFill: mod.UIBgFill.None,
+                imageType: mod.UIImageType.None,
+                imageColor: [1, 1, 1],
+                imageAlpha: 1,
+                buttonEnabled: false
+                },
+                {
+                type: "Text",
+                name: "Text_MercRoundsWon",
+                position: [0, 0],
+                size: [50, 25],
+                anchor: mod.UIAnchor.CenterRight,
+                visible: true,
+                textLabel: "Merc Rounds: 0",
+                textColor: [1, 1, 1],
+                textAlpha: 1,
+                textSize: 18,
+                textAnchor: mod.UIAnchor.Center,
+                padding: 0,
+                bgColor: [0.2, 0.2, 0.2],
+                bgAlpha: 1,
+                bgFill: mod.UIBgFill.None,
+                imageType: mod.UIImageType.None,
+                imageColor: [1, 1, 1],
+                imageAlpha: 1,
+                buttonEnabled: false
+                }
+            ]
             }
-          ]
+        ]
         }
         );
+
 
         // Store widget references for updates
         static sealsText: mod.UIWidget | undefined;
         static mercsText: mod.UIWidget | undefined;
         static timeText: mod.UIWidget | undefined;
+        static currentRoundText: mod.UIWidget | undefined;
+        static sealRoundsText: mod.UIWidget | undefined
+        static mercRoundsText: mod.UIWidget | undefined;
 
 
         private constructor() {}
@@ -1447,6 +1670,9 @@ export namespace UI {
             this.sealsText = mod.FindUIWidgetWithName("Text_Score_SealsRemaining");
             this.mercsText = mod.FindUIWidgetWithName("Text_Score_MercsRemaining");
             this.timeText = mod.FindUIWidgetWithName("Text_Score_RoundTime");
+            this.currentRoundText = mod.FindUIWidgetWithName("Text_Score_CurrentRound");
+            this.sealRoundsText = mod.FindUIWidgetWithName("Text_SealRoundsWon");
+            this.mercRoundsText = mod.FindUIWidgetWithName("Text_MercRoundsWon");
         }
 
         // Update the score widget with current game data
@@ -1485,11 +1711,11 @@ export namespace UI {
 
             /* SEALs ALIVE */
             if (this.sealsText)
-                mod.SetUITextLabel(this.sealsText, mod.Message("SEALs: {}", sealsAlive));
+                mod.SetUITextLabel(this.sealsText, mod.Message("{}", sealsAlive));
 
             /* MERCs ALIVE */
             if (this.mercsText)
-                mod.SetUITextLabel(this.mercsText, mod.Message("MERCs: {}", mercsAlive));
+                mod.SetUITextLabel(this.mercsText, mod.Message("{}", mercsAlive));
 
             /* ROUND TIMER */
             if (this.timeText) {
@@ -1524,6 +1750,18 @@ export namespace UI {
                     mod.SetUITextColor(this.timeText, mod.CreateVector(1, 1, 1));
                 }
             }
+
+            /* CURRENT ROUND */
+            if (this.currentRoundText)
+                mod.SetUITextLabel(this.currentRoundText, mod.Message("Round {}", matchData.roundNum));
+
+            /* SEAL ROUNDS WON */
+            if (this.sealRoundsText)
+                mod.SetUITextLabel(this.sealRoundsText, mod.Message("{}", matchData.scores[0]));
+
+            /* MERC ROUNDS WON */
+            if (this.mercRoundsText)
+                mod.SetUITextLabel(this.mercRoundsText, mod.Message("{}", matchData.scores[1]));
 
             // Update widget visibility based on game state
             let shouldShow = matchData.isGamePlayActive() && showTimeWidget;
