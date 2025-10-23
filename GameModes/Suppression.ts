@@ -23,9 +23,12 @@
     - undeploy all players , wait a few seconds , reset player states , redeploy all players
     - repeat until one team wins the majority of rounds
 
+    @TODO: restrict parachute use
 */
-// import * as modlib from 'modlib'; // required on server side
+
+
 import * as modlib from '../PortalSDK/code/modlib'; // for local testing
+// import * as modlib from 'modlib'; // required on server side
 const WorldIcon_Team_Players = 700; // 700 - 715
 
 ////////////////////////////////// PLAYER EVENTS ///////////////////////////////////////
@@ -153,9 +156,12 @@ export async function OnGameModeStarted()
     //  }
 
     // setup world icons
-    for (let i = 0; i < 16; i++)
+    for (let i = 0; i < 32; i++)
     {
         const icon = mod.GetWorldIcon(WorldIcon_Team_Players + i); // preload team player icons
+        if (!icon)
+            continue;
+
         mod.EnableWorldIconImage(icon, false); // disable icon image
         mod.EnableWorldIconText(icon, false); // disable icon text
         mod.SetWorldIconColor(icon, mod.CreateVector(1, 1, 1)); // white color
@@ -228,6 +234,14 @@ export function OngoingGlobal(): void
 
 class CZSealStats
 {
+    /* POINTS 
+        - kill: 3 points
+        - assist: 1 point
+        - suicide: -1 point
+        - friendly kill: -2 points
+        - survive round: 1 point
+        - bomb plant/defuse: 6 points
+    */
     score: number[] = [0, 0]; // current round score , total score
     kills: number[] = [0, 0]; // number of kills
     assists: number[] = [0, 0]; // number of assists
@@ -532,6 +546,7 @@ class CZSeal
         /* check for self-harm */
         if (killerSeal === this)
         {
+            // @TODO: negate score for self-kill
             console.log(`Player ${killerSeal.playerID} killed themselves`);
             //  log.info(mod.Message("{} killed themselves", killerSeal.player));
             return;
@@ -585,6 +600,17 @@ class CZSeal
         mod.RemoveEquipment(this.player, mod.InventorySlots.MiscGadget); // remove misc gadget from player
 
         this.isArmed = false;   // prevent subsequent disarm calls
+    }
+
+    SetInputMode(restrict: boolean): void
+    {
+        if (!mod.GetSoldierState(this.player, mod.SoldierStateBool.IsAlive))
+            return;
+
+        mod.EnableInputRestriction(this.player, mod.RestrictedInputs.Jump, restrict); // ensure jump is disabled
+        mod.EnableInputRestriction(this.player, mod.RestrictedInputs.MoveForwardBack, restrict); // ensure move forward/back is disabled
+        mod.EnableInputRestriction(this.player, mod.RestrictedInputs.MoveLeftRight, restrict); // ensure move left/right is disabled
+        mod.EnableInputRestriction(this.player, mod.RestrictedInputs.FireWeapon, restrict); // ensure weapon firing is disabled
     }
 
 
@@ -756,12 +782,7 @@ class CZMatchData
                 seal.setAIBehavior(false); 
             }
             else
-            {
-                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.Jump, true); // ensure jump is disabled
-                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.MoveForwardBack, true); // ensure move forward/back is disabled
-                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.MoveLeftRight, true); // ensure move left/right is disabled
-                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.FireWeapon, true); // ensure weapon firing is disabled
-            }
+                seal.SetInputMode(true);
         }
         
         this.roundNum = 0;
@@ -842,12 +863,7 @@ class CZMatchData
                 seal.setAIBehavior(false); 
             }
             else
-            {
-                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.Jump, true); // ensure jump is disabled
-                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.MoveForwardBack, true); // ensure move forward/back is disabled
-                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.MoveLeftRight, true); // ensure move left/right is disabled
-                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.FireWeapon, true); // ensure weapon firing is disabled
-            }
+                seal.SetInputMode(true);
 
             mod.DeployPlayer(seal.player); // deploy the player
             mod.SetWorldIconOwner(seal.teamIcon, seal.playerTeam);
@@ -879,12 +895,7 @@ class CZMatchData
                 seal.setAIBehavior(true); // set ai to battlefield behavior
             }
             else
-            {
-                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.Jump, false); // ensure jump is enabled
-                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.MoveForwardBack, false); // ensure move forward/back is enabled
-                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.MoveLeftRight, false); // ensure move left/right is enabled
-                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.FireWeapon, false); // ensure weapon firing is enabled
-            }
+                seal.SetInputMode(false);
         }
 
         this.roundNum++;
@@ -905,6 +916,8 @@ class CZMatchData
         }
         else
             mod.DisplayNotificationMessage(mod.Message("Round {} ended in a draw", this.roundNum));
+        
+        await mod.Wait(8); // wait a few seconds before performing end round logic ( allow players to perform end of round actions such as dancing , emotes , etc. )
 
         console.log(`Round ${this.roundNum} ended. Winner: ${winner === 0 ? 'Draw' : this.getTeamName(winner - 1)} | Score: ${this.scores[0]} - ${this.scores[1]}`);
 
@@ -926,12 +939,7 @@ class CZMatchData
                 seal.setAIBehavior(false); 
             }
             else
-            {
-                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.Jump, true); // ensure jump is disabled
-                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.MoveForwardBack, true); // ensure move forward/back is disabled
-                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.MoveLeftRight, true); // ensure move left/right is disabled
-                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.FireWeapon, true); // ensure weapon firing is disabled
-            }
+                seal.SetInputMode(true);
         }
 
         /* log merc stats */
@@ -951,12 +959,7 @@ class CZMatchData
                 seal.setAIBehavior(false); 
             }
             else
-            {
-                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.Jump, true); // ensure jump is disabled
-                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.MoveForwardBack, true); // ensure move forward/back is disabled
-                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.MoveLeftRight, true); // ensure move left/right is disabled
-                mod.EnableInputRestriction(seal.player, mod.RestrictedInputs.FireWeapon, true); // ensure weapon firing is disabled
-            }
+                seal.SetInputMode(true);
         }
 
         /* Check for match end */
@@ -964,7 +967,8 @@ class CZMatchData
             await this.endMatch();
         else
         {
-            await mod.Wait(7); // wait a few seconds before redeploying players ( notification is 6 seconds )
+            // @TODO: display scoreboard ui
+            await mod.Wait(7); // wait a few seconds before preparing for the next round
             await this.preRound(); // prepare for the next round
         }
     }
@@ -1064,7 +1068,7 @@ class CZMatchData
 
     OnPlayerReturnedToDeployScreen(eventPlayer: mod.Player): void
     {
-
+        mod.DisplayNotificationMessage(mod.Message("You will respawn next round"));
     }
 
     OnPlayerDamaged(eventPlayer: mod.Player, eventDamageType: mod.DamageType, eventOtherPlayer: mod.Player): void
