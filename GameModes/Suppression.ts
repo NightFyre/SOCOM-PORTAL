@@ -27,7 +27,13 @@
 */
 import * as modlib from '../PortalSDK/code/modlib'; // for local testing
 // import * as modlib from 'modlib'; // required on server side
-const WorldIcon_Team_Players = 700; // 700 - 715
+const AI_SPAWNERS = 100;
+const AI_SPAWN_POINTS = 2;
+const WORLD_ICON_PLAYERS = 700; // 700 - 715
+const MIN_PLAYERS_TO_START = 1; // minimum players required to start the match
+const MAX_PLAYERS_FOR_BOTS = 16; // maximum players before bots are removed
+const MAX_PLAYERS = 32;
+const MAX_PLAYERS_PER_TEAM = MAX_PLAYERS / 2;
 
 ////////////////////////////////// PLAYER EVENTS ///////////////////////////////////////
 
@@ -71,6 +77,16 @@ export function OnPlayerUndeploy(eventPlayer: mod.Player): void
     matchData.OnPlayerReturnedToDeployScreen(eventPlayer);
 }
 
+// This will trigger when an AISpawner spawns an AI Soldier.
+export function OnSpawnerSpawned(eventPlayer: mod.Player, eventSpawner: mod.Spawner): void
+{
+    let matchData = CZMatchData.get();
+    if (!matchData)
+        return;
+
+    matchData.OnSpawnBot(eventPlayer, eventSpawner);
+}
+
 // Triggered on player death/kill, returns dying player, the killer, etc. Useful for updating scores, updating progression, handling any death/kill related logic.
 export function OnPlayerDied( eventPlayer: mod.Player,  eventOtherPlayer: mod.Player,  eventDeathType: mod.DeathType,  eventWeaponUnlock: mod.WeaponUnlock ): void 
 {
@@ -80,7 +96,7 @@ export function OnPlayerDied( eventPlayer: mod.Player,  eventOtherPlayer: mod.Pl
         return;
 
     /* get seal victim instance */
-    let victim = CZSeal.get(eventPlayer);
+    let victim = CZSeal.get(eventPlayer, undefined);
     if (!victim)
         return;
 
@@ -97,12 +113,15 @@ export function OnPlayerDied( eventPlayer: mod.Player,  eventOtherPlayer: mod.Pl
     victim.OnPlayerDied(eventDeathType, eventOtherPlayer);
 
     matchData.OnPlayerEliminated(eventPlayer);
+
+    // Note: Don't remove AI CZSeal instances here - they'll be cleaned up at round end
+    // This allows the match logic to properly track eliminated bots for victory conditions
 }
 
 export function OnPlayerEarnedKill( eventPlayer: mod.Player, eventOtherPlayer: mod.Player, eventDeathType: mod.DeathType, eventWeaponUnlock: mod.WeaponUnlock ): void { }
 export function OnPlayerEarnedAssist( eventPlayer: mod.Player, eventOtherPlayer: mod.Player, eventDeathType: mod.DeathType, eventWeaponUnlock: mod.WeaponUnlock ): void 
 { 
-    let shooter = CZSeal.get(eventPlayer);
+    let shooter = CZSeal.get(eventPlayer, undefined);
     if (!shooter)
         return;
 
@@ -117,7 +136,7 @@ export function OnPlayerDamaged(
     eventWeaponUnlock: mod.WeaponUnlock
 ): void 
 {
-    let victim = CZSeal.get(eventPlayer);
+    let victim = CZSeal.get(eventPlayer, undefined);
     if (!victim || !victim.isAlive) // player already dead , ignore
         return;
 
@@ -141,6 +160,9 @@ export async function OnGameModeStarted()
 
     /* create match data instance */
     let matchData = CZMatchData.get();
+
+    //  for ( let spawner of matchData.botSpawners )
+    //      mod.AISetUnspawnOnDead(spawner, true); // set spawners to unspawn bots on death
 
     /* set default camera for all players to third person */
     mod.SetCameraTypeForAll(mod.Cameras.ThirdPerson, 0);
@@ -213,22 +235,32 @@ export function OngoingGlobal(): void
     // Check all players for camera updates (runs every frame)
     for (let player of CZSeal.sealObjects)
     {
-        let seal = CZSeal.get(player);
+        let seal = CZSeal.get(player, undefined);
         if (!seal || !seal.isValid())
             continue;
 
         /* update camera state */
         seal.CameraUpdate(); // update camera state if alive and not AI
-        
+
+        /* update transforms */
+        seal.TransformsUpdate();
+
         /* update name tag */
         seal.IconUpdate();
+
+        /* update ai path */
+        seal.aiPathUpdate(); // update AI pathing
     }
 }
 
 /// --------------------------------- CZSEAL --------------------------------- ///
 
 
-
+export enum SoldierCameraView
+{
+    RightShoulder,
+    LeftShoulder
+}
 
 class CZSealStats
 {
@@ -305,10 +337,27 @@ class CZSealStats
     }
 }
 
-export enum SoldierCameraView
+class SoldierTM
 {
-    RightShoulder,
-    LeftShoulder
+    location!: mod.Vector;
+    rotation!: mod.Vector;
+    lookAt!: mod.Vector;
+    velocity!: number;
+    private player: mod.Player;
+
+    constructor(player: mod.Player)
+    {
+        this.player = player;
+        this.update();
+    }
+
+    update(): void
+    {
+        this.location = mod.GetSoldierState(this.player, mod.SoldierStateVector.GetPosition);
+        this.lookAt = mod.GetSoldierState(this.player, mod.SoldierStateVector.GetFacingDirection);
+        this.velocity = mod.GetSoldierState(this.player, mod.SoldierStateNumber.Speed);
+        this.rotation = mod.GetObjectRotation(this.player);
+    }
 }
 
 class CZSeal 
@@ -318,8 +367,9 @@ class CZSeal
     playerTeam: mod.Team;
     teamID: number;
     isAI: boolean;
-    name: mod.Message;
+    spawner: mod.Spawner | undefined;
     teamIcon: mod.WorldIcon;
+    soldierTM: SoldierTM;   
     hasSpawned: boolean = false;
     isAlive: boolean = false;
     maxHealth = 100; // AI get 200 health , players get 100
@@ -341,15 +391,17 @@ class CZSeal
     static sealObjects: mod.Player[] = [];
 
     /* should only be created via CZSeal.get() */
-    constructor(player: mod.Player)
+    constructor(player: mod.Player, spawner?: mod.Spawner)
     {
         this.player = player;
         this.playerID = mod.GetObjId(player);
         this.playerTeam = mod.GetTeam(player);
         this.teamID = mod.GetObjId(this.playerTeam); // teamID should be 1 or 2
         this.isAI = mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier);
-        this.name = this.getPlayerName();
         this.teamIcon = mod.GetWorldIcon(WORLD_ICON_PLAYERS + this.playerID);
+        this.soldierTM = new SoldierTM(player);
+        if (this.isAI && spawner)
+            this.spawner = spawner;
         mod.SetWorldIconText(this.teamIcon, mod.Message("{}", this.player));
         mod.SetWorldIconOwner(this.teamIcon, this.playerTeam);
         mod.EnableWorldIconText(this.teamIcon, true);
@@ -360,7 +412,7 @@ class CZSeal
     static #allSealPlayers: { [key: number]: CZSeal } = {};
 
     /* should only be accessed via OnPlayer Events , a new Seal will be created if none exists */
-    static get(player: mod.Player): CZSeal | undefined
+    static get(player: mod.Player, spawner: mod.Spawner | undefined): CZSeal | undefined
     {
         let playerID = mod.GetObjId(player);
         if (playerID > -1)
@@ -368,9 +420,9 @@ class CZSeal
             let seal = CZSeal.#allSealPlayers[playerID];
             if (!seal)
             {
-                seal = new CZSeal(player);
+                seal = new CZSeal(player, spawner);
                 CZSeal.#allSealPlayers[playerID] = seal;
-                console.log(`Created CZSeal for Player ID: ${playerID} | TeamID: ${seal.teamID} | isAI: ${seal.isAI} | Name: ${seal.name.toString()}`);
+                console.log(`Created CZSeal for Player ID: ${playerID} | TeamID: ${seal.teamID} | isAI: ${seal.isAI}`);
             }
 
             return seal;
@@ -445,6 +497,42 @@ class CZSeal
         mod.SetWorldIconText(this.teamIcon, mod.Message("{}", this.player));
     }
 
+    /* */
+    TransformsUpdate() : void
+    {
+        if (!this.isSoldierAlive())
+            return;
+
+        this.soldierTM.update();
+    }
+
+    /* send bot to nearest enemy player . . . lol */
+    lastAIPathUpdateTime: number = 0;
+    aiPathUpdate() : void
+    {
+        let currentTime = mod.GetMatchTimeElapsed();
+        if (currentTime - this.lastAIPathUpdateTime < 5000) // update every 5 seconds
+            return;
+
+        if (!this.isSoldierAlive() || !this.isAI || this.lastAIPathUpdateTime <= 0)
+            return;
+
+        let matchData = CZMatchData.get();
+        if (!matchData)
+            return;
+
+        let closestPlayer = mod.ClosestPlayerTo(this.soldierTM.location, mod.GetTeam(this.teamID == 1 ? 2 : 1)); // find closest enemy player
+        if (!closestPlayer)
+            return;
+
+        let closestSeal = CZSeal.get(closestPlayer, undefined);
+        if (!closestSeal || !closestSeal.isSoldierAlive())
+            return;
+
+        mod.AILOSMoveToBehavior(this.player, closestSeal.soldierTM.location); // move to closest enemy player
+        this.lastAIPathUpdateTime = currentTime;
+    }
+
     /* switch between left and right shoulder view */
     private switchShoulderView(): void
     {
@@ -459,7 +547,7 @@ class CZSeal
         if (!this.isAlive)
             return;
 
-        let victim = CZSeal.get(eventOtherPlayer);
+        let victim = CZSeal.get(eventOtherPlayer, undefined);
         if (!victim)
             return;
 
@@ -478,7 +566,7 @@ class CZSeal
         let damageReceived = this.currentHealth - newHealth;
         this.currentHealth = newHealth; // sync current health
 
-        let shooter = CZSeal.get(eventOtherPlayer as mod.Player);
+        let shooter = CZSeal.get(eventOtherPlayer, undefined);
         if (!shooter || !shooter.isAlive) // shooter is not alive , ignore
             return;
 
@@ -537,7 +625,7 @@ class CZSeal
         mod.EnableWorldIconText(this.teamIcon, false);
 
         /* get killer seal instance */
-        let killerSeal = CZSeal.get(eventOtherPlayer as mod.Player);
+        let killerSeal = CZSeal.get(eventOtherPlayer as mod.Player, undefined);
         if (!killerSeal || !killerSeal.isAlive) // killer is not alive , ignore
             return;
 
@@ -586,7 +674,7 @@ class CZSeal
     /* removes all equipment from the player */
     Disarm(): void
     {
-        if (this.isArmed === false)
+        if (this.isArmed === false || !this.isSoldierAlive())
             return;
 
         mod.RemoveEquipment(this.player, mod.InventorySlots.PrimaryWeapon); // remove primary weapon from player
@@ -603,7 +691,7 @@ class CZSeal
 
     SetInputMode(restrict: boolean): void
     {
-        if (!mod.GetSoldierState(this.player, mod.SoldierStateBool.IsAlive))
+        if (!this.isSoldierAlive())
             return;
 
         mod.EnableInputRestriction(this.player, mod.RestrictedInputs.Jump, restrict); // ensure jump is disabled
@@ -660,18 +748,19 @@ class CZSeal
     }
 
     /* enables or disables AI behavior for the bot instance */
-    setAIBehavior(state: boolean): void
+    setAIBehavior(attack: boolean): void
     {
         if (!this.isAI)
             return;
 
 
-        mod.AIEnableShooting(this.player, state);
-        mod.AIEnableTargeting(this.player, state);
+        mod.AIEnableShooting(this.player, attack);
+        mod.AIEnableTargeting(this.player, attack);
 
-        if (state)
+        if (attack)
         {
             mod.AIBattlefieldBehavior(this.player);
+            mod.AISetStance(this.player, mod.Stance.Stand);
         }
         else
         {
@@ -679,9 +768,20 @@ class CZSeal
             mod.AISetStance(this.player, mod.Stance.Crouch);
         }
     }
+
+    isSoldierAlive(): boolean
+    {
+        return mod.GetSoldierState(this.player, mod.SoldierStateBool.IsAlive);
+    }
 }
 
 /// ------------------------------ CZMATCHDATA ------------------------------- ///
+
+export enum SoldierTeam 
+{
+    SEALS = 1, 
+    MERCS = 2
+}
 
 export enum GameState
 {
@@ -700,17 +800,21 @@ class CZMatchData
     roundTime: number = 0; // time left for the current round in seconds
     roundTimeMax: number = 240; // max round time in seconds ( 4 minutes )
     matchTime: number = 0; // total accumulated match time in seconds
-    scores: number[] = [0, 0]; // rounds won [team1, team2]
-    currentPlayers: number = 0; // total connected players
-    minPlayers: number = 2; // minimum players to start the match
-    maxPlayers: number = 16; // maximum players allowed in the match
+    players: number = 0; // total players in the match ( includes bots)
     bots: number = 0; // number of AI bots in the match
-
+    scores: number[] = [0, 0]; // rounds won [team1, team2]
+    teams: number[] = [0, 0]; // number of players per team [team1, team2]
+    botIDs: number[] = []; // list of bot player IDs in the match
+    botSpawners: mod.Spawner[] = []; // list of bot spawners in the map
+    isSpawnModeEnabled: boolean = false; // whether spawn mode is enabled [ determnined via obtaining bot spawners in the map ]
+    
     // private singleton instance
     private static instance: CZMatchData | undefined;
     
     constructor() 
     {
+        this.botSpawners = [mod.GetSpawner(AI_SPAWNERS), mod.GetSpawner(AI_SPAWNERS + 1)]; // get bot spawners for each team
+        this.isSpawnModeEnabled = mod.GetObjId(this.botSpawners[0]) !== -1 && mod.GetObjId(this.botSpawners[1]) !== -1;
     }
 
     static get(): CZMatchData
@@ -732,7 +836,7 @@ class CZMatchData
         switch (this.state)
         {
             case GameState.WaitingForPlayers:
-                if (this.currentPlayers >= this.minPlayers)
+                if (this.players >= MIN_PLAYERS_TO_START)
                 {
                     await this.startMatch();
                 }
@@ -746,7 +850,7 @@ class CZMatchData
         let timeLeft = this.roundTime;
         let minutes = Math.floor(timeLeft / 60);
         let seconds = timeLeft % 60;
-        console.log(`Match State: ${GameState[this.state]} | Round: ${this.roundNum}/${this.roundMax} | Time Left: ${minutes}:${seconds.toString().padStart(2, '0')} | Score: ${this.scores[0]} - ${this.scores[1]} | Players: ${this.currentPlayers} (Bots: ${this.bots})`);
+        console.log(`Match State: ${GameState[this.state]} | Round: ${this.roundNum}/${this.roundMax} | Time Left: ${minutes}:${seconds.toString().padStart(2, '0')} | Score: ${this.scores[0]} - ${this.scores[1]} | Players: ${this.players} (Bots: ${this.bots})`);
         await mod.Wait(1); // wait 1 second before next update
     }
 
@@ -754,6 +858,23 @@ class CZMatchData
     {
         this.roundTime--;   // decrement round time
         this.matchTime++;   // increment match time
+
+        // determine if 1 team is just bots
+        let playersAlive = [0, 0]; // players alive per team
+        for (let player of CZSeal.sealObjects)
+        {
+            let seal = CZSeal.get(player, undefined);
+            if (!seal || !seal.isAlive || seal.isAI)
+                continue;
+
+            playersAlive[seal.teamID - 1]++;
+        }
+
+        if ((playersAlive[0] === 0 && playersAlive[1] === 0))
+        {
+            await this.endRound(playersAlive[0] === 0 ? 2 : 1);  // end the round
+        }
+
         if (this.roundTime <= 0)
         {
             await this.endRound(0);  // end the round
@@ -765,13 +886,14 @@ class CZMatchData
         if (this.state !== GameState.WaitingForPlayers)
             return; // only start match if waiting for players
 
+
         mod.DeployAllPlayers(); // deploy all players for a warm up period
-        mod.DisplayNotificationMessage(mod.Message("Match starting in 15 seconds..."));
+        mod.DisplayNotificationMessage(mod.Message("MATCH STARTING IN 15 SECONDS"));
         await mod.Wait(15); // wait 15 seconds before starting the match
 
         for (let player of CZSeal.sealObjects)
         {
-            let seal = CZSeal.get(player);
+            let seal = CZSeal.get(player, undefined);
             if (!seal)
                 continue;
 
@@ -802,7 +924,7 @@ class CZMatchData
         console.log(`SEALS Rounds Won: ${this.scores[0]}`);
         for (let player of CZSeal.sealObjects)
         {
-            let seal = CZSeal.get(player);
+            let seal = CZSeal.get(player, undefined);
             if (!seal)
                 continue;
 
@@ -817,7 +939,7 @@ class CZMatchData
         console.log(`MERCS Rounds Won: ${this.scores[1]}`);
         for (let player of CZSeal.sealObjects)
         {
-            let seal = CZSeal.get(player);
+            let seal = CZSeal.get(player, undefined);
             if (!seal)
                 continue;
             if (seal.teamID !== 2)
@@ -847,7 +969,7 @@ class CZMatchData
         /* respawn all players one at a time */
         for (let player of CZSeal.sealObjects)
         {
-            let seal = CZSeal.get(player);
+            let seal = CZSeal.get(player, undefined);
             if (!seal)
                 continue;
             
@@ -857,16 +979,57 @@ class CZMatchData
             seal.isArmed = true;
 
             /* set input restriction for pre-round */
-            if (seal.isAI)
-            {
-                seal.setAIBehavior(false); 
-            }
-            else
-                seal.SetInputMode(true);
-
+            seal.SetInputMode(true);
             mod.DeployPlayer(seal.player); // deploy the player
             mod.SetWorldIconOwner(seal.teamIcon, seal.playerTeam);
             mod.EnableWorldIconText(seal.teamIcon, true);
+        }
+
+        /* add bots if player count is low (only count human players) */
+        let humanPlayers = this.players - this.bots;
+        if (humanPlayers < MAX_PLAYERS_FOR_BOTS)
+        {
+            let totalBotsNeeded = MAX_PLAYERS_FOR_BOTS - humanPlayers;
+            let targetPlayersPerTeam = MAX_PLAYERS_FOR_BOTS / 2;
+            
+            // Calculate how many bots each team needs to reach balanced teams
+            let sealsNeeded = targetPlayersPerTeam - this.teams[0];
+            let mercsNeeded = targetPlayersPerTeam - this.teams[1];
+            let sealsToAdd = sealsNeeded > 0 ? sealsNeeded : 0;
+            let mercsToAdd = mercsNeeded > 0 ? mercsNeeded : 0;         
+            
+            // If the calculation doesn't match totalBotsNeeded, distribute remaining bots evenly
+            let calculatedBots = sealsToAdd + mercsToAdd;
+            if (calculatedBots !== totalBotsNeeded) {
+                // Reset and distribute evenly
+                let botsPerTeam = totalBotsNeeded / 2; // integer division in Portal
+                let extraBot = totalBotsNeeded % 2;
+                
+                let sealsBase = botsPerTeam + (this.teams[0] <= this.teams[1] ? extraBot : 0);
+                let sealsMax = targetPlayersPerTeam - this.teams[0];
+                sealsToAdd = sealsBase > sealsMax ? sealsMax : sealsBase;
+                sealsToAdd = sealsToAdd > 0 ? sealsToAdd : 0;
+                mercsToAdd = totalBotsNeeded - sealsToAdd;
+            }
+            
+            console.log(`Planning to add ${totalBotsNeeded} bots total (SEALS: ${sealsToAdd}, MERCS: ${mercsToAdd})`);
+            console.log(`Current team counts - SEALS: ${this.teams[0]}, MERCS: ${this.teams[1]}`);
+            
+            // Add bots to SEALS team
+            for (let i = 0; i < sealsToAdd; i++)
+            {
+                this.spawnAI(SoldierTeam.SEALS);
+                await mod.Wait(0.2); // wait a bit between spawns for proper registration
+            }
+            
+            // Add bots to MERCS team
+            for (let i = 0; i < mercsToAdd; i++)
+            {
+                this.spawnAI(SoldierTeam.MERCS);
+                await mod.Wait(0.2); // wait a bit between spawns for proper registration
+            }
+
+            console.log(`Bot spawning complete. Total players: ${this.players}, Bots: ${this.bots}`);
         }
 
         mod.SetSpawnMode(mod.SpawnModes.Deploy); // restore normal spawn mode
@@ -885,16 +1048,18 @@ class CZMatchData
         /* disable player input restrictions */
         for (let player of CZSeal.sealObjects)
         {
-            let seal = CZSeal.get(player);
+            let seal = CZSeal.get(player, undefined);
             if (!seal)
                 continue;
 
             if (seal.isAI)
             {
-                seal.setAIBehavior(true); // set ai to battlefield behavior
+                seal.setAIBehavior(true);
             }
             else
+            {
                 seal.SetInputMode(false);
+            }
         }
 
         this.roundNum++;
@@ -918,13 +1083,17 @@ class CZMatchData
         
         await mod.Wait(8); // wait a few seconds before performing end round logic ( allow players to perform end of round actions such as dancing , emotes , etc. )
 
+
         console.log(`Round ${this.roundNum} ended. Winner: ${winner === 0 ? 'Draw' : this.getTeamName(winner - 1)} | Score: ${this.scores[0]} - ${this.scores[1]}`);
 
+        /* collect bot IDs before cleanup and reset round stats */
+        let botsToRemove: number[] = [];
+        
         /* log seal stats */
         console.log("SEALS");
         for (let player of CZSeal.sealObjects)
         {
-            let seal = CZSeal.get(player);
+            let seal = CZSeal.get(player, undefined);
             if (!seal)
                 continue;
 
@@ -935,7 +1104,8 @@ class CZMatchData
             
             if (seal.isAI)
             {
-                seal.setAIBehavior(false); 
+                seal.setAIBehavior(false);
+                botsToRemove.push(seal.playerID); // collect bot for removal
             }
             else
                 seal.SetInputMode(true);
@@ -945,7 +1115,7 @@ class CZMatchData
         console.log("MERCS");
         for (let player of CZSeal.sealObjects)
         {
-            let seal = CZSeal.get(player);
+            let seal = CZSeal.get(player, undefined);
             if (!seal)
                 continue;
             if (seal.teamID !== 2)
@@ -955,11 +1125,34 @@ class CZMatchData
             
             if (seal.isAI)
             {
-                seal.setAIBehavior(false); 
+                seal.setAIBehavior(false);
+                if (!botsToRemove.includes(seal.playerID)) {
+                    botsToRemove.push(seal.playerID); // collect bot for removal (avoid duplicates)
+                }
             }
             else
                 seal.SetInputMode(true);
         }
+
+        /* update team counts by removing all bots */
+        for (let botID of botsToRemove) {
+            let botSeal = CZSeal.getPlayerByID(botID);
+            if (botSeal) {
+                this.teams[botSeal.teamID - 1]--; // decrement team player count once per bot
+            }
+        }
+
+        /* remove all bots from spawners first */
+        for ( let spawner of this.botSpawners )
+            mod.UnspawnAllAIsFromAISpawner(spawner); // unspawn all bots from spawner
+        
+        /* remove bot seal instances */
+        for ( let botID of botsToRemove )
+            CZSeal.remove(botID); // remove bot seal instances
+        
+        this.botIDs = []; // clear bot ID list
+        this.players -= this.bots; // update player count
+        this.bots = 0; // reset bot count
 
         /* Check for match end */
         if (this.scores[0] >= 6 || this.scores[1] >= 6 || this.roundNum >= this.roundMax)
@@ -978,22 +1171,25 @@ class CZMatchData
     {
         const playerID = mod.GetObjId(eventPlayer);
         console.log(`Player joined the game with id: ${playerID}`);
-        let seal = CZSeal.get(eventPlayer);
+
+        let seal = CZSeal.get(eventPlayer, undefined);
         if (!seal)
             return; // invalid seal object
+        log.info(mod.Message("{} joined the game", eventPlayer, seal.teamID));
+
 
         mod.SetRedeployTime(eventPlayer, 0.0); // disable redeploy timer
         
-        /* add player to match data */
-        this.currentPlayers++;
-
-        /* add bot count if AI */
-        if (seal.isAI)
-            this.bots++;
+        /* add player count to match data (bots are handled separately in OnSpawnBot) */
+        if (!seal.isAI) {
+            this.players++; // increment player count for human players
+            this.teams[seal.teamID - 1]++; // increment team player count for human players
+        }
+        // Note: Bot counting is handled in OnSpawnBot to avoid double-counting
 
         
         // check if the match is in progress
-        if (this.state !== GameState.WaitingForPlayers)
+        if (this.state !== GameState.WaitingForPlayers && seal.isAI === false)
         {
             // match is currently in progress , auto spawn should be disabled , set player as dead to prevent any possible bugs & disable their ability to redeploy
             // hopefully everything else is handled on the start of the new round.
@@ -1003,9 +1199,6 @@ class CZMatchData
             console.log(`Player ${seal.playerID} joined during active match , set as dead`);
             return;
         }
-
-        if (!seal.isAI)
-            log.info(mod.Message("{} joined the game", seal.player, seal.teamID));
     }
 
     /* triggered when a player leaves the game */
@@ -1014,9 +1207,17 @@ class CZMatchData
         let seal = CZSeal.getPlayerByID(eventNumber);
         if (!seal)
             return; // invalid seal object
-        
-        this.currentPlayers--;
-        this.bots -= seal.isAI ? 1 : 0;
+
+        this.players--;
+        if (seal.isAI) {
+            this.bots--;
+            // Remove from bot ID tracking
+            const botIndex = this.botIDs.indexOf(seal.playerID);
+            if (botIndex > -1) {
+                this.botIDs.splice(botIndex, 1);
+            }
+        }
+        this.teams[seal.teamID - 1]--; // decrement team player count
 
         /* log event */
         console.log(`Player Left: ID: ${seal.playerID} | TeamID: ${seal.teamID}`);
@@ -1033,7 +1234,7 @@ class CZMatchData
         if (this.state !== GameState.PreRound)
             return; // ignore spawns while waiting for players
 
-        let seal = CZSeal.get(eventPlayer);
+        let seal = CZSeal.get(eventPlayer, undefined);
         if (!seal)
             return;
 
@@ -1066,9 +1267,35 @@ class CZMatchData
         console.log(`Player ${seal.playerID} spawned for team ${seal.teamID} | isAI: ${seal.isAI}`);
     }
 
+    OnSpawnBot(eventPlayer: mod.Player, eventSpawner: mod.Spawner): void
+    {
+        let soldier = CZSeal.get(eventPlayer, eventSpawner);
+        if (!soldier)
+        {
+            console.log(`Failed to register spawned bot from spawner ID: ${mod.GetObjId(eventSpawner)}`);
+            return;
+        }
+
+        // Only increment counts if this bot isn't already tracked
+        if (!this.botIDs.includes(soldier.playerID)) {
+            this.bots++;
+            this.players++; // increment total player count
+            this.teams[soldier.teamID - 1]++; // increment team player count
+            this.botIDs.push(soldier.playerID); // add bot player ID to match data
+        }
+        
+        soldier.setAIBehavior(false); // disable AI behavior initially
+        console.log(`Bot Spawned: ID ${soldier.playerID} | TeamID: ${soldier.teamID} | Total Bots: ${this.bots} | Total Players: ${this.players}`);
+    }
+
     OnPlayerReturnedToDeployScreen(eventPlayer: mod.Player): void
     {
-        mod.DisplayNotificationMessage(mod.Message("You will respawn next round"));
+        /* not invoked for bots , only human players */
+        let seal = CZSeal.get(eventPlayer, undefined);
+        if (!seal)
+            return;
+
+        console.log(`Player Undeployed: ID ${seal.playerID} | TeamID: ${seal.teamID} | isAI: ${seal.isAI}`);
     }
 
     OnPlayerDamaged(eventPlayer: mod.Player, eventDamageType: mod.DamageType, eventOtherPlayer: mod.Player): void
@@ -1114,7 +1341,7 @@ class CZMatchData
         let alivePlayers: mod.Player[] = [];
         for (let player of CZSeal.sealObjects)
         {
-            let seal = CZSeal.get(player);
+            let seal = CZSeal.get(player, undefined);
             if (!seal || !seal.isAlive || seal.teamID !== teamID)
                 continue;
 
@@ -1127,7 +1354,7 @@ class CZMatchData
     {
         // Find the first valid, non-AI player to act as host
         for (let player of CZSeal.sealObjects) {
-            let seal = CZSeal.get(player);
+            let seal = CZSeal.get(player, undefined);
             if (seal && !seal.isAI) {
                 return player;
             }
@@ -1149,6 +1376,29 @@ class CZMatchData
     isGamePlayActive(): boolean
     {
         return this.state === GameState.PreRound || this.state === GameState.RoundActive || this.state === GameState.RoundEnd || this.state === GameState.MatchEnd;
+    }
+
+    spawnAI(teamID: number): void
+    {
+        if (teamID < 1 || teamID > 2)
+            return;
+
+        /* get spawner for team */
+        const spawner = this.botSpawners[teamID - 1];
+
+        /* get a random number between 0 - 3 for AI class */
+        const aiClassIndex = Math.floor(Math.random() * 4);
+        let aiClass: mod.SoldierClass;
+        switch (aiClassIndex) {
+            case 0: aiClass = mod.SoldierClass.Assault; break;
+            case 1: aiClass = mod.SoldierClass.Engineer; break;
+            case 2: aiClass = mod.SoldierClass.Support; break;
+            case 3: aiClass = mod.SoldierClass.Recon; break;
+            default: aiClass = mod.SoldierClass.Assault; break;
+        }
+
+        /* spawn AI from spawner with specified class and team */
+        mod.SpawnAIFromAISpawner(spawner, aiClass, mod.GetTeam(teamID));
     }
 }
 
