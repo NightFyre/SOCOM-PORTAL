@@ -25,8 +25,6 @@
 
     @TODO: restrict parachute use
 */
-
-
 import * as modlib from '../PortalSDK/code/modlib'; // for local testing
 // import * as modlib from 'modlib'; // required on server side
 const WorldIcon_Team_Players = 700; // 700 - 715
@@ -158,7 +156,7 @@ export async function OnGameModeStarted()
     // setup world icons
     for (let i = 0; i < 32; i++)
     {
-        const icon = mod.GetWorldIcon(WorldIcon_Team_Players + i); // preload team player icons
+        const icon = mod.GetWorldIcon(WORLD_ICON_PLAYERS + i); // preload team player icons
         if (!icon)
             continue;
 
@@ -351,7 +349,7 @@ class CZSeal
         this.teamID = mod.GetObjId(this.playerTeam); // teamID should be 1 or 2
         this.isAI = mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier);
         this.name = this.getPlayerName();
-        this.teamIcon = mod.GetWorldIcon(WorldIcon_Team_Players + this.playerID);
+        this.teamIcon = mod.GetWorldIcon(WORLD_ICON_PLAYERS + this.playerID);
         mod.SetWorldIconText(this.teamIcon, mod.Message("{}", this.player));
         mod.SetWorldIconOwner(this.teamIcon, this.playerTeam);
         mod.EnableWorldIconText(this.teamIcon, true);
@@ -579,6 +577,7 @@ class CZSeal
         if (mod.EventDeathTypeCompare(eventDeathType, mod.PlayerDeathTypes.Headshot))
             killerSeal.stats.headshotKills[0]++;
 
+        mod.DisplayNotificationMessage(mod.Message("You will respawn next round"), this.player);
         console.log(`Player ${killerSeal.playerID} eliminated Player ${this.playerID}`);
         //  log.info(mod.Message("{} eliminated {}", killerSeal.player, this.player));
         // mod.DisplayHighlightedWorldLogMessage(mod.Message("elimination"), killerSeal.player);
@@ -968,6 +967,7 @@ class CZMatchData
         else
         {
             // @TODO: display scoreboard ui
+            mod.DisplayNotificationMessage(mod.Message("preparing for the next round"));
             await mod.Wait(7); // wait a few seconds before preparing for the next round
             await this.preRound(); // prepare for the next round
         }
