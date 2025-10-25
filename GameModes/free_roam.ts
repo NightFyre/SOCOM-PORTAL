@@ -185,7 +185,7 @@ export namespace SOCOM {
             if (!seal)
                 return;
 
-            mod.SetTeam(seal.player, mod.GetTeam(SoldierTeam.SEALs)); // set player to SEALs team by default
+            mod.SetTeam(seal.player, mod.GetTeam(1)); // set player to SEALs team by default
 
             // Initialize game with first player as host
             if (CZGame.clients === 0 && !CZGame.host) {
@@ -430,7 +430,7 @@ export namespace SOCOM {
 
         update(): void
         {
-            if (!mod.IsPlayerValid(this.player))
+            if (!mod.IsPlayerValid(this.player) || !mod.GetSoldierState(this.player, mod.SoldierStateBool.IsAlive))
             {
 
                 return;
@@ -483,11 +483,6 @@ export namespace SOCOM {
             mod.SetWorldIconText(this.soldierIcon, mod.Message("{}", this.player));
             mod.SetWorldIconOwner(this.soldierIcon, this.playerTeam);
             mod.EnableWorldIconText(this.soldierIcon, true);
-            let iconWidget = mod.FindUIWidgetWithName(`WorldIcon_Player${this.playerID + 1}`) as mod.UIWidget;
-            if (iconWidget)
-            {
-                mod.SetUIWidgetBgAlpha(iconWidget, 0);
-            }
             CZSeal.sealObjects.push(player);
         }
 
@@ -552,6 +547,10 @@ export namespace SOCOM {
         /* call in game update to update seal state */
         update(): void
         {
+
+            if (!this.isSealValid())
+                return;
+
             /* update soldier transforms */
             this.soldierTM.update();
 
