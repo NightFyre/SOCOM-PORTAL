@@ -27,11 +27,10 @@
 */
 import * as modlib from '../PortalSDK/code/modlib'; // for local testing
 // import * as modlib from 'modlib'; // required on server side
-const AI_SPAWNERS = 100;
-const AI_SPAWN_POINTS = 2;
+const AI_SPAWNERS = 100; // 100 - 101 (HQ AI) | 102 (HOSTAGE) | 103 (VIP) | 104 (BOMB)
 const WORLD_ICON_PLAYERS = 700; // 700 - 715
 const MIN_PLAYERS_TO_START = 1; // minimum players required to start the match
-const MAX_PLAYERS_FOR_BOTS = 16; // maximum players before bots are removed
+const MAX_PLAYERS_FOR_BOTS = 8; // maximum players before bots are removed
 const MAX_PLAYERS = 32;
 const MAX_PLAYERS_PER_TEAM = MAX_PLAYERS / 2;
 
@@ -118,7 +117,10 @@ export function OnPlayerDied( eventPlayer: mod.Player,  eventOtherPlayer: mod.Pl
     // This allows the match logic to properly track eliminated bots for victory conditions
 }
 
+// Triggered when a player earns a kill.
 export function OnPlayerEarnedKill( eventPlayer: mod.Player, eventOtherPlayer: mod.Player, eventDeathType: mod.DeathType, eventWeaponUnlock: mod.WeaponUnlock ): void { }
+
+// Triggered when a player earns an assist on a kill.
 export function OnPlayerEarnedAssist( eventPlayer: mod.Player, eventOtherPlayer: mod.Player, eventDeathType: mod.DeathType, eventWeaponUnlock: mod.WeaponUnlock ): void 
 { 
     let shooter = CZSeal.get(eventPlayer, undefined);
@@ -221,6 +223,7 @@ export function OnGameModeEnding(): void
     //  log.info(mod.Message("SOCOM PORTAL - Suppression Game Mode Ended"));
 }
 
+// This will trigger every frame during an active game mode.
 export function OngoingGlobal(): void 
 {
     log.update();
@@ -240,17 +243,151 @@ export function OngoingGlobal(): void
             continue;
 
         /* update camera state */
-        seal.CameraUpdate(); // update camera state if alive and not AI
-
-        /* update transforms */
-        seal.TransformsUpdate();
-
-        /* update name tag */
-        seal.IconUpdate();
-
-        /* update ai path */
-        seal.aiPathUpdate(); // update AI pathing
+        seal.update();
     }
+}
+
+
+/// ------------------------------ CZCAMERA ------------------------------- ///
+
+export enum SoldierCameraView
+{
+    RightShoulder,
+    LeftShoulder
+}
+
+class CZCamera
+{
+    sealPlayer: CZSeal; // origin player reference
+    cameraType: mod.Cameras; // current camera type
+    attachedPlayer: mod.Player; // attached player 
+    viewType: SoldierCameraView; // current view type
+    isSpectateMode: boolean = false; // whether the camera is in spectate mode
+    isSpectatingPlayer: boolean = false; // whether the camera is in spectating mode
+    isZooming: boolean = false; // whether the player is currently zooming
+
+    // UI Elements
+    spectateUI;
+
+
+    constructor(sealPlayer: CZSeal)
+    {
+      this.sealPlayer = sealPlayer;
+      this.attachedPlayer = sealPlayer.player;
+      this.cameraType = mod.Cameras.ThirdPerson;
+      this.viewType = SoldierCameraView.RightShoulder;
+      this.spectateUI = undefined as any;
+    }
+
+    update():void
+    {
+        this.updateCameraView();
+    }
+
+    updateCameraView(): void
+    {
+        /* get zoom state */
+        let isCurrentlyZooming = mod.GetSoldierState(this.sealPlayer.player, mod.SoldierStateBool.IsZooming);
+        if (isCurrentlyZooming == this.isZooming)
+            return;
+
+        /* detect zoom pattern for shoulder switching */
+        if (this.sealPlayer.inputDetector.dtcInput(this.sealPlayer.player, isCurrentlyZooming))
+            this.switchShoulderView();
+
+        /* set zoom state */
+        this.isZooming = isCurrentlyZooming;
+        let currentShoulder = this.viewType === SoldierCameraView.RightShoulder ? 0 : 1;
+        
+        /* update camera */
+        mod.SetCameraTypeForPlayer(this.sealPlayer.player, this.isZooming ? mod.Cameras.FirstPerson : mod.Cameras.ThirdPerson, currentShoulder);
+    }
+
+    enterSpectatorMode(): void
+    {
+      /* find closest alive player to spectate */
+      let closestPlayer = mod.ClosestPlayerTo(this.sealPlayer.soldierTM.location, mod.GetTeam(this.sealPlayer.teamID)); // find closest team player
+      if (!closestPlayer)
+        return;
+
+      /* RESTRICT PLAYER INPUTS */
+      mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.MoveForwardBack, true);
+      mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.MoveLeftRight, true);
+      mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.CameraPitch, true);
+      mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.CameraYaw, true);
+      mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Crouch, true);
+      mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Jump, true);
+      mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Prone, true);
+      mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Interact, true);
+      mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.FireWeapon, true);
+      mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.FireWeapon, true);
+
+      try {
+        /* remove equipment */
+        this.sealPlayer.Disarm();
+      }
+      catch (e) {}
+
+      this.isSpectateMode = true;
+
+      this.AttachToPlayer(closestPlayer); // attach to closest player
+
+      mod.EnableUIInputMode(true);  // enable UI input mode
+    }
+
+    exitSpectatorMode(): void
+    {
+      /* UNRESTRICT PLAYER INPUTS */
+      mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.MoveForwardBack, false);
+      mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.MoveLeftRight, false);
+      mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.CameraPitch, false);
+      mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.CameraYaw, false);
+      mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Crouch, false);
+      mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Jump, false);
+      mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Prone, false);
+      mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Interact, false);
+      mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.FireWeapon, false);
+      mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.FireWeapon, false);
+
+
+      this.isSpectateMode = false;
+
+      this.AttachToPlayer(this.sealPlayer.player); // reattach to self
+
+      mod.EnableUIInputMode(false);  // disable UI input mode
+    }
+
+    AttachToPlayer(player: mod.Player): void
+    {
+      /*
+        ========== Start ==========
+        Exception: NoMatchingOverload
+        Function: SetCameraTargetForPlayer
+        Error info: 
+        	Provided parameters () do not match any overload. Function supports the following overloads: (Player, Player).
+        ========== End ==========
+      */
+
+        /* SET ATTACHED PLAYER */
+        this.attachedPlayer = player;
+
+        /* SET CAMERA TARGET TO PLAYER */
+        
+        //@ ts-ignore
+        mod.SetCameraTargetForPlayer(this.sealPlayer, player);
+
+        /* UPDATE FLAG */
+        this.isSpectatingPlayer = this.attachedPlayer !== this.sealPlayer.player;
+    }
+
+    /* switch between left and right shoulder view */
+    private switchShoulderView(): void
+    {
+        this.viewType = this.viewType === SoldierCameraView.RightShoulder ? 
+            SoldierCameraView.LeftShoulder : 
+            SoldierCameraView.RightShoulder;
+    }
+    
 }
 
 /// --------------------------------- CZSEAL --------------------------------- ///
@@ -259,12 +396,6 @@ export enum SoldierTeam
 {
     SEALS = 1, 
     MERCS = 2
-}
-
-export enum SoldierCameraView
-{
-    RightShoulder,
-    LeftShoulder
 }
 
 class CZSealStats
@@ -340,9 +471,17 @@ class CZSealStats
         this.friendlyFireDeaths = [0, 0];
         this.friendlyFireKills = [0, 0];
     }
+
+    tallyScore(): number
+    {
+        /* elimination logic */
+        this.score[0] = this.kills[0] * 3 + this.assists[0] * 1 + this.deaths[0] * -1;
+        return this.score[0];
+    }
 }
 
-class SoldierTM
+// @TODO: could be invalid
+class CZSoldierTM
 {
     location!: mod.Vector;
     rotation!: mod.Vector;
@@ -358,6 +497,12 @@ class SoldierTM
 
     update(): void
     {
+        if (!mod.IsPlayerValid(this.player))
+        {
+
+            return;
+        }
+
         this.location = mod.GetSoldierState(this.player, mod.SoldierStateVector.GetPosition);
         this.lookAt = mod.GetSoldierState(this.player, mod.SoldierStateVector.GetFacingDirection);
         this.velocity = mod.GetSoldierState(this.player, mod.SoldierStateNumber.Speed);
@@ -374,12 +519,11 @@ class CZSeal
     isAI: boolean;
     spawner: mod.Spawner | undefined;
     teamIcon: mod.WorldIcon;
-    soldierTM: SoldierTM;   
+    soldierTM: CZSoldierTM;
     hasSpawned: boolean = false;
     isAlive: boolean = false;
     maxHealth = 100; // AI get 200 health , players get 100
     currentHealth = 100;
-    isZooming: boolean = false;
     isArmed: boolean = true;
     isAdmin: boolean = false; // Track if this player is an admin
     isRemovedFromRound: boolean = false; // Track if this player has been removed from the round due to excessive friendly fire
@@ -387,7 +531,11 @@ class CZSeal
     cameraView: SoldierCameraView = SoldierCameraView.RightShoulder; // current camera view mode
 
     // zoom pattern detection for shoulder switching
-    private inputDetector = new Utility.Input();
+    inputDetector = new Utility.Input();
+
+    private camera: CZCamera;
+
+    welcomeUI;
 
     // seal stats
     stats: CZSealStats = new CZSealStats();
@@ -404,9 +552,13 @@ class CZSeal
         this.teamID = mod.GetObjId(this.playerTeam); // teamID should be 1 or 2
         this.isAI = mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier);
         this.teamIcon = mod.GetWorldIcon(WORLD_ICON_PLAYERS + this.playerID);
-        this.soldierTM = new SoldierTM(player);
+        this.camera = new CZCamera(this);
+        this.soldierTM = new CZSoldierTM(player);
         if (this.isAI && spawner)
             this.spawner = spawner;
+
+        this.welcomeUI = undefined as any;
+
         mod.SetWorldIconText(this.teamIcon, mod.Message("{}", this.player));
         mod.SetWorldIconOwner(this.teamIcon, this.playerTeam);
         mod.EnableWorldIconText(this.teamIcon, true);
@@ -415,6 +567,9 @@ class CZSeal
 
     // static list of all seal players by playerID
     static #allSealPlayers: { [key: number]: CZSeal } = {};
+
+    /* MAIN METHODS */
+
 
     /* should only be accessed via OnPlayer Events , a new Seal will be created if none exists */
     static get(player: mod.Player, spawner: mod.Spawner | undefined): CZSeal | undefined
@@ -472,48 +627,35 @@ class CZSeal
     }
 
     /* call in game update to update camera state */
-    CameraUpdate(): void
+    update(): void
     {
+        /* update soldier transforms */
+        this.soldierTM.update();
+
+        /* update camera state */
+        if (!this.isAI)
+          this.camera.update();
+
+        /* update name tag icon */
+        this.updateIcon();
+
+        /* update ai pathing & behavior */
         if (this.isAI)
-            return;
-        
-        /* get zoom state */
-        let isCurrentlyZooming = mod.GetSoldierState(this.player, mod.SoldierStateBool.IsZooming);
-        if (isCurrentlyZooming == this.isZooming)
-            return;
+          this.updateAIPath();
 
-        /* detect zoom pattern for shoulder switching */
-        if (this.inputDetector.dtcInput(this.player, isCurrentlyZooming))
-            this.switchShoulderView();
-
-        /* set zoom state */
-        this.isZooming = isCurrentlyZooming;
-        let currentShoulder = this.cameraView === SoldierCameraView.RightShoulder ? 0 : 1;
-        
-        /* update camera */
-        mod.SetCameraTypeForPlayer(this.player, this.isZooming ? mod.Cameras.FirstPerson : mod.Cameras.ThirdPerson, currentShoulder);
     }
 
     /* update the player name tag icon - team, position, and text. does not update the icon visibility state */
-    IconUpdate(): void
+    private updateIcon(): void
     {
         mod.SetWorldIconOwner(this.teamIcon, this.playerTeam);
-        mod.SetWorldIconPosition(this.teamIcon, mod.GetSoldierState(this.player, mod.SoldierStateVector.GetPosition));
+        mod.SetWorldIconPosition(this.teamIcon, this.soldierTM.location);
         mod.SetWorldIconText(this.teamIcon, mod.Message("{}", this.player));
-    }
-
-    /* */
-    TransformsUpdate() : void
-    {
-        if (!this.isSoldierAlive())
-            return;
-
-        this.soldierTM.update();
     }
 
     /* send bot to nearest enemy player . . . lol */
     lastAIPathUpdateTime: number = 0;
-    aiPathUpdate() : void
+    private updateAIPath() : void
     {
         let currentTime = mod.GetMatchTimeElapsed();
         if (currentTime - this.lastAIPathUpdateTime < 5) // update every 5 seconds
@@ -538,12 +680,14 @@ class CZSeal
         this.lastAIPathUpdateTime = currentTime;
     }
 
-    /* switch between left and right shoulder view */
-    private switchShoulderView(): void
+
+    /* EVENTS */
+
+
+    /* triggered when the player earns a kill */
+    OnEarnedKill(): void
     {
-        this.cameraView = this.cameraView === SoldierCameraView.RightShoulder ? 
-            SoldierCameraView.LeftShoulder : 
-            SoldierCameraView.RightShoulder;
+
     }
 
     /* triggered when the player earns an assist */
@@ -676,6 +820,8 @@ class CZSeal
         // mod.DisplayHighlightedWorldLogMessage(mod.Message("elimination"), killerSeal.player);
     }
 
+    /* ACTIONS */
+
     /* removes all equipment from the player */
     Disarm(): void
     {
@@ -694,6 +840,7 @@ class CZSeal
         this.isArmed = false;   // prevent subsequent disarm calls
     }
 
+    /* enables or disables player input */
     SetInputMode(restrict: boolean): void
     {
         if (!this.isSoldierAlive())
@@ -714,6 +861,7 @@ class CZSeal
         return mod.GetSoldierState(this.player, mod.SoldierStateBool.IsAlive);
     }
     
+    /* returns the player name */
     getPlayerName(): mod.Message
     {
         return mod.Message("getPlayerName", this.player);
@@ -774,6 +922,7 @@ class CZSeal
         }
     }
 
+    /* checks if the soldier is alive */
     isSoldierAlive(): boolean
     {
         return mod.GetSoldierState(this.player, mod.SoldierStateBool.IsAlive);
@@ -792,6 +941,7 @@ export enum GameState
     MatchEnd
 }
 
+// @TODO: make static class
 class CZMatchData
 {
     state: GameState = GameState.WaitingForPlayers; // current game state
@@ -826,11 +976,13 @@ class CZMatchData
         return this.instance;
     }
 
+    /* destroys the singleton instance */
     static destroy(): void
     {
         this.instance = undefined; // destroy the instance
     }
 
+    /* main update loop for the match */
     async update(): Promise<void>
     {
         switch (this.state)
@@ -854,7 +1006,8 @@ class CZMatchData
         await mod.Wait(1); // wait 1 second before next update
     }
 
-    async updateRound(): Promise<void>
+    /* updates the current round state */
+    private async updateRound(): Promise<void>
     {
         this.roundTime--;   // decrement round time
         this.matchTime++;   // increment match time
@@ -881,7 +1034,8 @@ class CZMatchData
         }
     }
 
-    async startMatch(): Promise<void>
+    /* starts a new match */
+    private async startMatch(): Promise<void>
     {
         if (this.state !== GameState.WaitingForPlayers)
             return; // only start match if waiting for players
@@ -915,7 +1069,8 @@ class CZMatchData
         await this.preRound(); // start the first round immediately
     }
 
-    async endMatch(): Promise<void>
+    /* ends the match and displays final scores */
+    private async endMatch(): Promise<void>
     {
         mod.DisplayNotificationMessage(mod.Message("Final Score: {} - {}", this.scores[0], this.scores[1]));
         this.state = GameState.MatchEnd;
@@ -957,7 +1112,8 @@ class CZMatchData
             mod.EndGameMode(host);
     }
 
-    async preRound(): Promise<void>
+    /* prepares for a new round */
+    private async preRound(): Promise<void>
     {
         this.state = GameState.PreRound; // transition to pre-round state
 
@@ -975,7 +1131,6 @@ class CZMatchData
             
             seal.hasSpawned = false;
             seal.currentHealth = seal.maxHealth;
-            seal.isZooming = false;
             seal.isArmed = true;
 
             /* set input restriction for pre-round */
@@ -1041,7 +1196,8 @@ class CZMatchData
         console.log(`Preparing for Round ${this.roundNum}`);
     }
 
-    startRound(): void
+    /* starts a new round */
+    private startRound(): void
     {
         mod.EnableAllPlayerDeploy(false); // disable redeployment for all players
         
@@ -1068,7 +1224,8 @@ class CZMatchData
         this.state = GameState.RoundActive;
     }
 
-    async endRound(winner: number): Promise<void>
+    /* ends the current round , winner = 0 for draw , 1 for team 1 , 2 for team 2 */
+    private async endRound(winner: number): Promise<void>
     {
         this.state = GameState.RoundEnd;
 
@@ -1267,6 +1424,7 @@ class CZMatchData
         console.log(`Player ${seal.playerID} spawned for team ${seal.teamID} | isAI: ${seal.isAI}`);
     }
 
+    /* triggered when a bot is spawned from a spawner */
     OnSpawnBot(eventPlayer: mod.Player, eventSpawner: mod.Spawner): void
     {
         let soldier = CZSeal.get(eventPlayer, eventSpawner);
@@ -1288,6 +1446,7 @@ class CZMatchData
         console.log(`Bot Spawned: ID ${soldier.playerID} | TeamID: ${soldier.teamID} | Total Bots: ${this.bots} | Total Players: ${this.players}`);
     }
 
+    /* triggered when a player returns to the deploy screen */
     OnPlayerReturnedToDeployScreen(eventPlayer: mod.Player): void
     {
         /* not invoked for bots , only human players */
@@ -1298,12 +1457,13 @@ class CZMatchData
         console.log(`Player Undeployed: ID ${seal.playerID} | TeamID: ${seal.teamID} | isAI: ${seal.isAI}`);
     }
 
+    /* triggered when a player is damaged */
     OnPlayerDamaged(eventPlayer: mod.Player, eventDamageType: mod.DamageType, eventOtherPlayer: mod.Player): void
     {
 
     }    
 
-    // called when a player is eliminated (killed) during an active round
+    /* triggered when a player is eliminated (killed) */
     OnPlayerEliminated(eventPlayer: mod.Player): void
     {
         /*
@@ -1335,6 +1495,7 @@ class CZMatchData
         this.endRound(winner);
     }
 
+    /* utility method to get alive players for a team */
     getAlivePlayers(team: mod.Team): mod.Player[]
     {
         let teamID = mod.GetObjId(team);
@@ -1350,6 +1511,7 @@ class CZMatchData
         return alivePlayers;
     }
 
+    /* utility method to get a host player (first non-AI player) */
     getHostPlayer(): mod.Player | undefined
     {
         // Find the first valid, non-AI player to act as host
@@ -1367,6 +1529,7 @@ class CZMatchData
         return undefined;
     }
 
+    /* utility method to get team name from team ID */
     getTeamName(team: number): string
     {
         return team === 0 ? "SEALS" : "MERCS";
@@ -1378,6 +1541,7 @@ class CZMatchData
         return this.state === GameState.PreRound || this.state === GameState.RoundActive || this.state === GameState.RoundEnd || this.state === GameState.MatchEnd;
     }
 
+    /* utility method to spawn an AI bot for the specified team */
     spawnAI(teamID: number): void
     {
         if (teamID < 1 || teamID > 2)
@@ -1458,7 +1622,7 @@ class CZConsole
     }
 }
 
-/// ------------------------------ NAMESPACE ------------------------------- ///
+/// ------------------------------ NAMESPACES ------------------------------- ///
 
 // https://github.com/JDWardle/BFPortalScripts/blob/main/logging/logging.ts
 export namespace Logging {
