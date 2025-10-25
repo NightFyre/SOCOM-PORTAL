@@ -435,9 +435,8 @@ export class CZSoldierTM
 
     update(): void
     {
-        if (!mod.IsPlayerValid(this.player))
+        if (!mod.IsPlayerValid(this.player) || !mod.GetSoldierState(this.player, mod.SoldierStateBool.IsAlive))
         {
-
             return;
         }
 
@@ -908,6 +907,8 @@ export class CZMatchData
         CZMatchData.state = GameState.WaitingForPlayers;
         CZMatchData.host = host;
         CZMatchData.hostID = mod.GetObjId(host);
+        CZMatchData.players++; // increment player count for human players
+        CZMatchData.teams[mod.GetObjId(mod.GetTeam(host)) - 1]++; // increment team player count for human players
         CZMatchData.botSpawners = [mod.GetSpawner(AI_SPAWNERS), mod.GetSpawner(AI_SPAWNERS + 1)]; // get bot spawners for each team
         CZMatchData.isSpawnModeEnabled = mod.GetObjId(CZMatchData.botSpawners[0]) !== -1 && mod.GetObjId(CZMatchData.botSpawners[1]) !== -1;
     }
