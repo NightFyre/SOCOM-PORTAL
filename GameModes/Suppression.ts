@@ -27,8 +27,7 @@
 */
 import * as modlib from '../PortalSDK/code/modlib'; // for local testing
 // import * as modlib from 'modlib'; // required on server side
-const AI_SPAWNERS = 100;
-const AI_SPAWN_POINTS = 2;
+const AI_SPAWNERS = 100; // 100 - 101 (HQ AI) | 102 (HOSTAGE) | 103 (VIP) | 104 (BOMB)
 const WORLD_ICON_PLAYERS = 700; // 700 - 715
 const MIN_PLAYERS_TO_START = 1; // minimum players required to start the match
 const MAX_PLAYERS_FOR_BOTS = 8; // maximum players before bots are removed
@@ -118,7 +117,10 @@ export function OnPlayerDied( eventPlayer: mod.Player,  eventOtherPlayer: mod.Pl
     // This allows the match logic to properly track eliminated bots for victory conditions
 }
 
+// Triggered when a player earns a kill.
 export function OnPlayerEarnedKill( eventPlayer: mod.Player, eventOtherPlayer: mod.Player, eventDeathType: mod.DeathType, eventWeaponUnlock: mod.WeaponUnlock ): void { }
+
+// Triggered when a player earns an assist on a kill.
 export function OnPlayerEarnedAssist( eventPlayer: mod.Player, eventOtherPlayer: mod.Player, eventDeathType: mod.DeathType, eventWeaponUnlock: mod.WeaponUnlock ): void 
 { 
     let shooter = CZSeal.get(eventPlayer, undefined);
@@ -221,6 +223,7 @@ export function OnGameModeEnding(): void
     //  log.info(mod.Message("SOCOM PORTAL - Suppression Game Mode Ended"));
 }
 
+// This will trigger every frame during an active game mode.
 export function OngoingGlobal(): void 
 {
     log.update();
@@ -1619,7 +1622,7 @@ class CZConsole
     }
 }
 
-/// ------------------------------ NAMESPACE ------------------------------- ///
+/// ------------------------------ NAMESPACES ------------------------------- ///
 
 // https://github.com/JDWardle/BFPortalScripts/blob/main/logging/logging.ts
 export namespace Logging {
