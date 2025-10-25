@@ -593,17 +593,21 @@ export class CZSeal
     lastAIPathUpdateTime: number = 0;
     private updateAIPath() : void
     {
+        if (!this.isSealAlive() || !this.isAI)
+            return;
+
         let currentTime = mod.GetMatchTimeElapsed();
         if (currentTime - this.lastAIPathUpdateTime < 5) // update every 5 seconds
             return;
 
-        if (!this.isSealAlive() || !this.isAI)
-            return;
+        mod.AIBattlefieldBehavior(this.player); // set battlefield behavior
 
         let closestPlayer = mod.ClosestPlayerTo(this.soldierTM.location, mod.GetTeam(this.teamID == 1 ? 2 : 1)); // find closest enemy player
         if (!closestPlayer)
             return;
+        
 
+        mod.AISetTarget(this.player, closestPlayer); // set target to closest enemy player
         let closestSeal = CZSeal.get(closestPlayer, undefined);
         if (!closestSeal || !closestSeal.isSealAlive())
             return;
