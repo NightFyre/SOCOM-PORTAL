@@ -136,6 +136,9 @@ export namespace SOCOM {
             
                 /* update camera state */
                 seal.CameraUpdate();
+                
+                /* update player widgets */
+                seal.UpdateWidgets();
             }
         }
 
@@ -251,6 +254,9 @@ export namespace SOCOM {
 
         // zoom pattern detection for shoulder switching
         private inputDetector = new Utility.Input();
+        
+        // Per-player UI widget (only for non-AI players)
+        playerOriginWidget?: UI.PlayerOriginWidget;
 
         // static list of all player instances
         static sealObjects: mod.Player[] = [];
@@ -262,6 +268,11 @@ export namespace SOCOM {
             this.playerID = mod.GetObjId(player);
             this.teamID = mod.GetObjId(mod.GetTeam(player)); // teamID should be 1 or 2
             this.isAI = mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier);
+
+            // Only create PlayerOriginWidget for non-AI players
+            if (!this.isAI) {
+                this.playerOriginWidget = new UI.PlayerOriginWidget(player);
+            }
 
             CZSeal.sealObjects.push(player);
         }
@@ -300,6 +311,11 @@ export namespace SOCOM {
             // Remove from the players dictionary
             let seal = this.#allSealPlayers[playerID];
             if (seal) {
+                // Hide and cleanup player widgets
+                if (seal.playerOriginWidget && seal.playerOriginWidget.OriginWidget) {
+                    mod.SetUIWidgetVisible(seal.playerOriginWidget.OriginWidget, false);
+                }
+                
                 // Remove from sealObjects array
                 const index = this.sealObjects.indexOf(seal.player);
                 if (index > -1) {
@@ -337,6 +353,25 @@ export namespace SOCOM {
             
             /* update camera */
             mod.SetCameraTypeForPlayer(this.player, this.isZooming ? mod.Cameras.FirstPerson : mod.Cameras.ThirdPerson, currentShoulder);
+        }
+
+        /* update player widgets - call this regularly for non-AI players */
+        UpdateWidgets(): void
+        {
+            if (this.playerOriginWidget) {
+                this.playerOriginWidget.update(this.player);
+              console.log(`CZSeal: Updated playerOriginWidget for Player ID: ${this.playerID}`);
+              }
+            else
+              console.log(`CZSeal: No playerOriginWidget for Player ID: ${this.playerID}`);
+        }
+
+        /* show or hide the player origin widget */
+        ShowPlayerOriginWidget(visible: boolean): void
+        {
+            if (this.playerOriginWidget && this.playerOriginWidget.OriginWidget) {
+                mod.SetUIWidgetVisible(this.playerOriginWidget.OriginWidget, visible);
+            }
         }
 
         /* switch between left and right shoulder view */
@@ -635,6 +670,285 @@ export namespace Utility {
 // https://staging.d70cu09wjw7ws.amplifyapp.com/
 // https://discord.com/channels/870246147455877181/1428410039080718487
 export namespace UI {
+
+    export class PlayerOriginWidget {
+        
+        OriginWidget: mod.UIWidget | undefined;
+        player: mod.Player;
+        locationText: mod.UIWidget | undefined;
+        rotationText: mod.UIWidget | undefined;
+        velocityText: mod.UIWidget | undefined;
+
+        constructor(player: mod.Player) {
+            this.player = player;
+            const playerID = mod.GetObjId(player);
+            
+            // Create unique widget names for this player instance
+            //  const containerName = `Container_PlayerInfo_${playerID}`;
+            //  const originName = `Text_Origin_${playerID}`;
+            //  const rotationName = `Text_Rotation_${playerID}`;
+            //  const velocityName = `Text_Velocity_${playerID}`;
+            
+            this.OriginWidget = modlib.ParseUI(
+              {
+                type: "Container",
+                name: "Container_PlayerInfo",
+                position: [10, 10],
+                size: [400, 250],
+                anchor: mod.UIAnchor.TopLeft,
+                visible: true,
+                textLabel: "",
+                textColor: [1, 1, 1],
+                textAlpha: 1,
+                textSize: 24,
+                textAnchor: mod.UIAnchor.Center,
+                padding: 0,
+                bgColor: [0.0314, 0.0431, 0.0431],
+                bgAlpha: 1,
+                bgFill: mod.UIBgFill.Blur,
+                imageType: mod.UIImageType.None,
+                imageColor: [1, 1, 1],
+                imageAlpha: 1,
+                buttonEnabled: false,
+                playerID: playerID,
+                children: [
+                  {
+                    type: "Text",
+                    name: "Text_Origin",
+                    position: [0, 0],
+                    size: [400, 50],
+                    anchor: mod.UIAnchor.TopLeft,
+                    visible: true,
+                    textLabel: "Origin: x, y, z",
+                    textColor: [0.0667, 1, 0],
+                    textAlpha: 1,
+                    textSize: 24,
+                    textAnchor: mod.UIAnchor.CenterLeft,
+                    padding: 10,
+                    bgColor: [0.2, 0.2, 0.2],
+                    bgAlpha: 1,
+                    bgFill: mod.UIBgFill.None,
+                    imageType: mod.UIImageType.None,
+                    imageColor: [1, 1, 1],
+                    imageAlpha: 1,
+                    buttonEnabled: false,
+                    playerID: playerID,
+                  },
+                  {
+                    type: "Text",
+                    name: "Text_Rotation",
+                    position: [0, 50],
+                    size: [400, 50],
+                    anchor: mod.UIAnchor.TopLeft,
+                    visible: true,
+                    textLabel: "Rotation: pitch, yaw, roll",
+                    textColor: [0.0667, 1, 0],
+                    textAlpha: 1,
+                    textSize: 24,
+                    textAnchor: mod.UIAnchor.CenterLeft,
+                    padding: 10,
+                    bgColor: [0.2, 0.2, 0.2],
+                    bgAlpha: 1,
+                    bgFill: mod.UIBgFill.None,
+                    imageType: mod.UIImageType.None,
+                    imageColor: [1, 1, 1],
+                    imageAlpha: 1,
+                    buttonEnabled: false,
+                    playerID: playerID,
+                  },
+                  {
+                    type: "Text",
+                    name: "Text_Velocity",
+                    position: [0, 100],
+                    size: [400, 50],
+                    anchor: mod.UIAnchor.TopLeft,
+                    visible: true,
+                    textLabel: "Velocity: 0m/s",
+                    textColor: [0.0667, 1, 0],
+                    textAlpha: 1,
+                    textSize: 24,
+                    textAnchor: mod.UIAnchor.CenterLeft,
+                    padding: 10,
+                    bgColor: [0.2, 0.2, 0.2],
+                    bgAlpha: 1,
+                    bgFill: mod.UIBgFill.None,
+                    imageType: mod.UIImageType.None,
+                    imageColor: [1, 1, 1],
+                    imageAlpha: 1,
+                    buttonEnabled: false,
+                    playerID: playerID,
+                  },
+                  {
+                    type: "Text",
+                    name: "Text_ShoulderSwap",
+                    position: [0, 150],
+                    size: [200, 50],
+                    anchor: mod.UIAnchor.TopLeft,
+                    visible: true,
+                    textLabel: "SHOULDER SWAP:",
+                    textColor: [1, 1, 1],
+                    textAlpha: 1,
+                    textSize: 16,
+                    textAnchor: mod.UIAnchor.Center,
+                    padding: 0,
+                    bgColor: [0.2, 0.2, 0.2],
+                    bgAlpha: 1,
+                    bgFill: mod.UIBgFill.None,
+                    imageType: mod.UIImageType.None,
+                    imageColor: [1, 1, 1],
+                    imageAlpha: 1,
+                    buttonEnabled: false
+                  },
+                  {
+                    type: "Text",
+                    name: "Text_ShowHideUI",
+                    position: [0, 200],
+                    size: [200, 50],
+                    anchor: mod.UIAnchor.TopLeft,
+                    visible: true,
+                    textLabel: "SHOW / HIDE UI:",
+                    textColor: [1, 1, 1],
+                    textAlpha: 1,
+                    textSize: 16,
+                    textAnchor: mod.UIAnchor.Center,
+                    padding: 0,
+                    bgColor: [0.2, 0.2, 0.2],
+                    bgAlpha: 1,
+                    bgFill: mod.UIBgFill.None,
+                    imageType: mod.UIImageType.None,
+                    imageColor: [1, 1, 1],
+                    imageAlpha: 1,
+                    buttonEnabled: false
+                  },
+                  {
+                    type: "Container",
+                    name: "Container_ShoulderSwapInstruction",
+                    position: [200, 150],
+                    size: [200, 50],
+                    anchor: mod.UIAnchor.TopLeft,
+                    visible: true,
+                    textLabel: "",
+                    textColor: [1, 1, 1],
+                    textAlpha: 1,
+                    textSize: 24,
+                    textAnchor: mod.UIAnchor.Center,
+                    padding: 0,
+                    bgColor: [0.2, 0.2, 0.2],
+                    bgAlpha: 0.3,
+                    bgFill: mod.UIBgFill.GradientBottom,
+                    imageType: mod.UIImageType.None,
+                    imageColor: [1, 1, 1],
+                    imageAlpha: 1,
+                    buttonEnabled: false,
+                    children: [
+                      {
+                        type: "Text",
+                        name: "Text_ShoulderSwapInstruction",
+                        position: [0, 0],
+                        size: [200, 50],
+                        anchor: mod.UIAnchor.TopLeft,
+                        visible: true,
+                        textLabel: "ADS FAST 2x Fast",
+                        textColor: [0.4392, 0.9216, 1],
+                        textAlpha: 1,
+                        textSize: 16,
+                        textAnchor: mod.UIAnchor.Center,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        imageType: mod.UIImageType.None,
+                        imageColor: [1, 1, 1],
+                        imageAlpha: 1,
+                        buttonEnabled: false
+                      }
+                    ]
+                  },
+                  {
+                    type: "Container",
+                    name: "Container_ADSMelee",
+                    position: [200, 200],
+                    size: [200, 50],
+                    anchor: mod.UIAnchor.TopLeft,
+                    visible: true,
+                    textLabel: "",
+                    textColor: [1, 1, 1],
+                    textAlpha: 1,
+                    textSize: 24,
+                    textAnchor: mod.UIAnchor.Center,
+                    padding: 0,
+                    bgColor: [0.2, 0.2, 0.2],
+                    bgAlpha: 0.3,
+                    bgFill: mod.UIBgFill.GradientBottom,
+                    imageType: mod.UIImageType.None,
+                    imageColor: [1, 1, 1],
+                    imageAlpha: 1,
+                    buttonEnabled: false,
+                    children: [
+                      {
+                        type: "Text",
+                        name: "Text_ADSMelee",
+                        position: [0, 0],
+                        size: [200, 50],
+                        anchor: mod.UIAnchor.Center,
+                        visible: true,
+                        textLabel: "ADS + MELEE",
+                        textColor: [0.4392, 0.9216, 1],
+                        textAlpha: 1,
+                        textSize: 16,
+                        textAnchor: mod.UIAnchor.Center,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        imageType: mod.UIImageType.None,
+                        imageColor: [1, 1, 1],
+                        imageAlpha: 1,
+                        buttonEnabled: false
+                      }
+                    ]
+                  }
+                ]
+              }
+            );
+
+            // Find the UI widgets using the unique names
+            this.locationText = mod.FindUIWidgetWithName("Text_Origin");
+            this.rotationText = mod.FindUIWidgetWithName("Text_Rotation");
+            this.velocityText = mod.FindUIWidgetWithName("Text_Velocity");
+        }
+
+        update(): void
+        {
+          if (!this.locationText || !this.rotationText || !this.velocityText || !this.OriginWidget)
+          {
+            console.log("PlayerOriginWidget: UI widgets not found");
+            return;
+          }
+
+          if (!mod.GetSoldierState(this.player, mod.SoldierStateBool.IsAlive))
+          {
+            //  mod.SetUIWidgetVisible(this.OriginWidget, false);
+            return;
+          }   
+
+          let origin = mod.GetSoldierState(this.player, mod.SoldierStateVector.GetPosition);
+          let velocity = mod.GetSoldierState(this.player, mod.SoldierStateNumber.Speed);
+          let rotation = mod.GetObjectRotation(this.player);
+          let ox = mod.XComponentOf(origin);
+          let oy = mod.YComponentOf(origin);
+          let oz = mod.ZComponentOf(origin);
+          let rx = mod.XComponentOf(rotation);
+          let ry = mod.YComponentOf(rotation);
+          let rz = mod.ZComponentOf(rotation);
+
+          mod.SetUITextLabel(this.locationText, mod.Message("Location: {}, {}, {}", Number(ox.toFixed(2)), Number(oy.toFixed(2)), Number(oz.toFixed(2))));
+          mod.SetUITextLabel(this.rotationText, mod.Message("Rotation: {}, {}, {}", Number(rx.toFixed(2)), Number(ry.toFixed(2)), Number(rz.toFixed(2))));
+          mod.SetUITextLabel(this.velocityText, mod.Message("Velocity: {}", Number(velocity.toFixed(2))));
+
+          mod.SetUIWidgetVisible(this.OriginWidget, true);
+        }
+    }
 
     export class DebugWidget
     {
@@ -1630,7 +1944,5 @@ export namespace UI {
           ]
         }
         );
-
-        
     }
 }
