@@ -563,6 +563,9 @@ export class CZSeal
     /* call in game update to update camera state */
     update(): void
     {
+        if (!this.isSealValid())
+            return;
+
         /* update soldier transforms */
         this.soldierTM.update();
 
@@ -595,7 +598,7 @@ export class CZSeal
         if (currentTime - this.lastAIPathUpdateTime < 5) // update every 5 seconds
             return;
 
-        if (!this.isSoldierAlive() || !this.isAI)
+        if (!this.isSealAlive() || !this.isAI)
             return;
 
         let closestPlayer = mod.ClosestPlayerTo(this.soldierTM.location, mod.GetTeam(this.teamID == 1 ? 2 : 1)); // find closest enemy player
@@ -603,7 +606,7 @@ export class CZSeal
             return;
 
         let closestSeal = CZSeal.get(closestPlayer, undefined);
-        if (!closestSeal || !closestSeal.isSoldierAlive())
+        if (!closestSeal || !closestSeal.isSealAlive())
             return;
 
         mod.AILOSMoveToBehavior(this.player, closestSeal.soldierTM.location); // move to closest enemy player
@@ -755,7 +758,7 @@ export class CZSeal
     /* removes all equipment from the player */
     Disarm(): void
     {
-        if (this.isArmed === false || !this.isSoldierAlive())
+        if (this.isArmed === false || !this.isSealValid())
             return;
 
         mod.RemoveEquipment(this.player, mod.InventorySlots.PrimaryWeapon); // remove primary weapon from player
@@ -773,7 +776,7 @@ export class CZSeal
     /* enables or disables player input */
     SetInputMode(restrict: boolean): void
     {
-        if (!this.isSoldierAlive())
+        if (!this.isSealAlive())
             return;
 
         mod.EnableInputRestriction(this.player, mod.RestrictedInputs.Jump, restrict); // ensure jump is disabled
@@ -852,8 +855,14 @@ export class CZSeal
         }
     }
 
+    /* checks if the soldier is valid */
+    isSealValid(): boolean
+    {
+        return this.isSealAlive() && mod.IsPlayerValid(this.player);
+    }
+
     /* checks if the soldier is alive */
-    isSoldierAlive(): boolean
+    isSealAlive(): boolean
     {
         return mod.GetSoldierState(this.player, mod.SoldierStateBool.IsAlive);
     }
@@ -897,7 +906,6 @@ export class CZMatchData
     static initialize(host: mod.Player): void
     {
         CZMatchData.state = GameState.WaitingForPlayers;
-        CZMatchData.players = 1;
         CZMatchData.host = host;
         CZMatchData.hostID = mod.GetObjId(host);
         CZMatchData.botSpawners = [mod.GetSpawner(AI_SPAWNERS), mod.GetSpawner(AI_SPAWNERS + 1)]; // get bot spawners for each team
