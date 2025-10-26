@@ -551,6 +551,7 @@ export namespace SOCOM
         teamIcon: mod.WorldIcon;
         soldierTM: CZSoldierTM;
         hasSpawned: boolean = false;
+        shouldSpectateOnNextSpawn: boolean = false;
         isAlive: boolean = false;
         maxHealth = 100; // AI get 200 health , players get 100
         currentHealth = 100;
@@ -817,6 +818,8 @@ export namespace SOCOM
         /* triggered when the player dies */
         OnPlayerDied(eventDeathType: mod.DeathType, eventOtherPlayer: mod.Player | undefined): void
         {
+            console.log(`[CZSeal::OnPlayerDied] Player ${this.playerID} OnPlayerDied called on seal instance ${this.playerID}: isAlive=${this.isAlive}, hasSpawned=${this.hasSpawned}`);
+            
             if (!this.isAlive)
             {
                 /* shouldn't happen , but just in case. previously checked in CZMatchData::OnPlayerDied */
@@ -829,6 +832,13 @@ export namespace SOCOM
             this.stats.deaths[0]++;
             this.currentHealth = 0;
             mod.EnableWorldIconText(this.teamIcon, false);
+            
+            // Set flag for spectator mode on next spawn (only for human players)
+            if (!this.isAI) {
+                this.shouldSpectateOnNextSpawn = true;
+            }
+            
+            console.log(`[CZSeal::OnPlayerDied] Player ${this.playerID} death state set: isAlive=${this.isAlive}, hasSpawned=${this.hasSpawned}, shouldSpectateOnNextSpawn=${this.shouldSpectateOnNextSpawn}`);
 
             /* get killer seal instance */
             let killerSeal = CZSeal.get(eventOtherPlayer as mod.Player, undefined);
@@ -843,6 +853,8 @@ export namespace SOCOM
             {
                 // @TODO: negate score for self-kill
                 console.log(`[CZSeal::OnPlayerDied] Player ${killerSeal.playerID} ended their own life.`);
+                // Still need to set the player as dead even for self-harm
+                // Note: isAlive and stats.deaths were already set at the top of this method
                 return;
             }
 
@@ -918,6 +930,9 @@ export namespace SOCOM
         /* enables or disables spectator mode */
         async SetSpectatorMode(spectate: boolean): Promise<void>
         {
+            if (this.isAI)
+                return;
+
             this.isSpectator = spectate;
             spectate ? await this.camera.enterSpectatorMode() : await this.camera.exitSpectatorMode();
         }
@@ -1234,8 +1249,17 @@ export namespace SOCOM
                     continue;
 
                 seal.hasSpawned = false;
+                seal.shouldSpectateOnNextSpawn = false;
                 seal.currentHealth = seal.maxHealth;
                 seal.isArmed = true;
+                console.log(`[CZMatchData::preRound] Reset Player ${seal.playerID}: hasSpawned=${seal.hasSpawned}, shouldSpectateOnNextSpawn=${seal.shouldSpectateOnNextSpawn}`);
+                
+                // Ensure player exits spectator mode for new round
+                if (seal.isSpectator && !seal.isAI) {
+                    await seal.SetSpectatorMode(false);
+                }
+                
+                await mod.Wait(0.2); // wait a bit between spawns for proper registration
 
                 /* set input restriction for pre-round */
                 seal.SetInputMode(true);
@@ -1370,9 +1394,7 @@ export namespace SOCOM
                 }
                 else
                 {
-                    if (seal.isSpectator){
-                        await seal.SetSpectatorMode(false);
-                    }
+                    await seal.SetSpectatorMode(false);
                     seal.SetInputMode(true);
                 }
             }
@@ -1398,9 +1420,7 @@ export namespace SOCOM
                 }
                 else
                 {
-                    if (seal.isSpectator){
-                        await seal.SetSpectatorMode(false);
-                    }
+                    await seal.SetSpectatorMode(false);
                     seal.SetInputMode(true);
                 }
             }
@@ -1517,13 +1537,27 @@ export namespace SOCOM
             if (!seal)
                 return;
 
+            console.log(`[CZMatchData::OnPlayerSpawned] Player ${mod.GetObjId(eventPlayer)} got seal instance ${seal.playerID}`);
+
             seal.playerTeam = mod.GetTeam(eventPlayer); // update team
             seal.teamID = mod.GetObjId(seal.playerTeam); // update teamID
+
+            console.log(`[CZMatchData::OnPlayerSpawned] Player ${seal.playerID} spawn check: hasSpawned=${seal.hasSpawned}, isAlive=${seal.isAlive}, shouldSpectateOnNextSpawn=${seal.shouldSpectateOnNextSpawn}, gameState=${GameState[CZMatchData.state]}`);
+
+            /* check if player should go into spectator mode (died previously this round) */
+            /* Only trigger spectator mode during active rounds, not during preRound */
+            if (seal.shouldSpectateOnNextSpawn && !seal.isAI && CZMatchData.state === GameState.RoundActive)
+            {
+                console.log(`[CZMatchData::OnPlayerSpawned] Player ${seal.playerID} should spectate (died previously) for team ${seal.teamID} | isAI: ${seal.isAI} | isAlive: ${seal.isAlive}`);
+                seal.SetSpectatorMode(true);
+                seal.Disarm(); // disarm the player
+                return; // go to spectator mode
+            }
 
             /* seal already spawned for this round */
             if (seal.hasSpawned)
             {
-                console.log(`[CZMatchData::OnPlayerSpawned] Player ${seal.playerID} attempted to spawn again for team ${seal.teamID} | isAI: ${seal.isAI}`);
+                console.log(`[CZMatchData::OnPlayerSpawned] Player ${seal.playerID} attempted to spawn again for team ${seal.teamID} | isAI: ${seal.isAI} | isAlive: ${seal.isAlive}`);
                 seal.SetSpectatorMode(true);
                 seal.Disarm(); // disarm the player
                 return; // already spawned
@@ -1532,6 +1566,7 @@ export namespace SOCOM
             /* new round spawn , set player state */
 
             /* set seal state */
+            console.log(`[CZMatchData::OnPlayerSpawned] Player ${seal.playerID} setting hasSpawned = true (was ${seal.hasSpawned})`);
             seal.hasSpawned = true;
             seal.isAlive = true;
 
@@ -1544,7 +1579,7 @@ export namespace SOCOM
                 mod.SetCameraTypeForPlayer(seal.player, mod.Cameras.ThirdPerson, seal.camera.viewType === SoldierCameraView.RightShoulder ? 0 : 1);
             }
 
-            console.log(`[CZMatchData::OnPlayerSpawned] Player ${seal.playerID} spawned for team ${seal.teamID} | isAI: ${seal.isAI}`);
+            console.log(`[CZMatchData::OnPlayerSpawned] Player ${seal.playerID} spawned for team ${seal.teamID} | isAI: ${seal.isAI} | hasSpawned: ${seal.hasSpawned} | isAlive: ${seal.isAlive}`);
         }
 
         /* triggered when a bot is spawned from a spawner */
@@ -1604,6 +1639,8 @@ export namespace SOCOM
             let victim = CZSeal.get(eventPlayer, undefined);
             if (!victim)
                 return;
+
+            console.log(`[MatchData::OnPlayerDied] Player ${mod.GetObjId(eventPlayer)} got seal instance ${victim.playerID} for death event`);
 
             if (!victim.isAlive) // player already dead , ignore
             {
