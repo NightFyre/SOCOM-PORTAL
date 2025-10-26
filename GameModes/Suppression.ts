@@ -275,20 +275,21 @@ export namespace SOCOM
             }
 
             /* RESTRICT PLAYER INPUTS */
-            Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Jump, true), undefined);
-            Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Prone, true), undefined);
-            Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Crouch, true), undefined);
-            Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Interact, true), undefined);
-            Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.CameraYaw, true), undefined);
-            Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.FireWeapon, true), undefined);
-            Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.FireWeapon, true), undefined);
-            Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.CameraPitch, true), undefined);
-            Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.MoveLeftRight, true), undefined);
-            Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.MoveForwardBack, true), undefined);
+            mod.EnableAllInputRestrictions(this.sealPlayer.player, true);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Jump, true), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Prone, true), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Crouch, true), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Interact, true), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.CameraYaw, true), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.FireWeapon, true), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.FireWeapon, true), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.CameraPitch, true), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.MoveLeftRight, true), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.MoveForwardBack, true), undefined);
             await mod.Wait(0.1); // small delay to ensure inputs are disabled
 
             /* remove equipment */
-            Utility.safeCall(() => this.sealPlayer.Disarm(), undefined);
+            this.sealPlayer.Disarm(), undefined;
             await mod.Wait(0.1); // small delay to ensure disarm is processed
 
             this.isSpectatingPlayer = true;
@@ -304,28 +305,27 @@ export namespace SOCOM
         async exitSpectatorMode(): Promise<void>
         {
             /* UNRESTRICT PLAYER INPUTS */
-            Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Jump, false), undefined);
-            Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Prone, false), undefined);
-            Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Crouch, false), undefined);
-            Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Interact, false), undefined);
-            Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.CameraYaw, false), undefined);
-            Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.FireWeapon, false), undefined);
-            Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.FireWeapon, false), undefined);
-            Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.CameraPitch, false), undefined);
-            Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.MoveLeftRight, false), undefined);
-            Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.MoveForwardBack, false), undefined);
+            mod.EnableAllInputRestrictions(this.sealPlayer.player, false);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Jump, false), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Prone, false), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Crouch, false), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Interact, false), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.CameraYaw, false), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.FireWeapon, false), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.FireWeapon, false), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.CameraPitch, false), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.MoveLeftRight, false), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.MoveForwardBack, false), undefined);
             await mod.Wait(0.1); // small delay to ensure inputs are re-enabled
 
             this.isSpectatingPlayer = false;
 
             await this.AttachToPlayer(this.sealPlayer.player); // reattach to self
 
-            mod.EnableUIInputMode(false);  // disable UI input mode
             this.sealPlayer.spectateCamera?.toggleVisible(false);
-            await mod.Wait(0.1); // small delay to ensure camera controls are hidden
+            mod.EnableUIInputMode(false);  // disable UI input mode
+            await mod.Wait(0.5); // small delay to ensure camera controls are hidden
 
-            Utility.safeCall(() => mod.UndeployPlayer(this.sealPlayer.player), undefined); // return to deploy screen
-            await mod.Wait(0.1); // small delay to ensure undeploy is processed
             console.log(`[CZCamera::exitSpectatorMode] Player ${this.sealPlayer.playerID} has exited spectator mode`);
         }
 
@@ -338,6 +338,10 @@ export namespace SOCOM
             {
                 // No alive players to spectate , should probably disable spectate mode
                 await this.exitSpectatorMode();
+                
+                mod.UndeployPlayer(this.sealPlayer.player); // return to deploy screen
+                await mod.Wait(0.1); // small delay to ensure undeploy is processed
+                
                 console.log(`[CZCamera::nextSpectateTarget] No alive players to spectate for player ${this.sealPlayer.playerID}`);
                 return;
             }
@@ -346,7 +350,7 @@ export namespace SOCOM
             let currentIndex = alivePlayers.indexOf(this.attachedPlayer);
             let nextIndex = (currentIndex + 1) % szArray;
             let nextPlayer = alivePlayers[nextIndex];
-            this.AttachToPlayer(nextPlayer);
+            await this.AttachToPlayer(nextPlayer);
             console.log(`[CZCamera::nextSpectateTarget] Player ${this.sealPlayer.playerID} is now spectating player ${mod.GetObjId(nextPlayer)}`);
         }
 
@@ -359,6 +363,10 @@ export namespace SOCOM
             {
                 // No alive players to spectate , should probably disable spectate mode
                 await this.exitSpectatorMode();
+
+                mod.UndeployPlayer(this.sealPlayer.player); // return to deploy screen
+                await mod.Wait(0.1); // small delay to ensure undeploy is processed
+                
                 console.log(`[CZCamera::prevSpectateTarget] No alive players to spectate for player ${this.sealPlayer.playerID}`);
                 return;
             }
@@ -367,7 +375,7 @@ export namespace SOCOM
             let currentIndex = alivePlayers.indexOf(this.attachedPlayer);
             let prevIndex = (currentIndex - 1 + szArray) % szArray;
             let prevPlayer = alivePlayers[prevIndex];
-            this.AttachToPlayer(prevPlayer);
+            await this.AttachToPlayer(prevPlayer);
             console.log(`[CZCamera::prevSpectateTarget] Player ${this.sealPlayer.playerID} is now spectating player ${mod.GetObjId(prevPlayer)}`);
         }
 
@@ -392,11 +400,11 @@ export namespace SOCOM
             mod.SetCameraTargetForPlayer(this.sealPlayer.player, player);
 
             /* RESET CAMERA TYPES */
-            Utility.safeCall(() => mod.SetCameraTypeForPlayer(this.sealPlayer.player, mod.Cameras.ThirdPerson, SoldierCameraView.LeftShoulder), undefined);
+            mod.SetCameraTypeForPlayer(this.sealPlayer.player, mod.Cameras.ThirdPerson, SoldierCameraView.LeftShoulder);
             await mod.Wait(0.1);
-            Utility.safeCall(() => mod.SetCameraTypeForPlayer(this.sealPlayer.player, mod.Cameras.FirstPerson), undefined);
+            mod.SetCameraTypeForPlayer(this.sealPlayer.player, mod.Cameras.FirstPerson);
             await mod.Wait(0.1);
-            Utility.safeCall(() => mod.SetCameraTypeForPlayer(this.sealPlayer.player, mod.Cameras.ThirdPerson, SoldierCameraView.RightShoulder), undefined);
+            mod.SetCameraTypeForPlayer(this.sealPlayer.player, mod.Cameras.ThirdPerson, SoldierCameraView.RightShoulder);
             await mod.Wait(0.1);
 
             /* UPDATE FLAG */
@@ -883,14 +891,14 @@ export namespace SOCOM
             if (this.isArmed === false || !this.isSealValid())
                 return;
 
-            Utility.safeCall( () => mod.RemoveEquipment(this.player, mod.InventorySlots.PrimaryWeapon), undefined); // remove primary weapon from player
-            Utility.safeCall( () => mod.RemoveEquipment(this.player, mod.InventorySlots.SecondaryWeapon), undefined); // remove secondary weapon from player
-            Utility.safeCall( () => mod.RemoveEquipment(this.player, mod.InventorySlots.Throwable), undefined); // remove thrown weapon from player
-            Utility.safeCall( () => mod.RemoveEquipment(this.player, mod.InventorySlots.MeleeWeapon), undefined); // remove melee weapon from player
-            Utility.safeCall( () => mod.RemoveEquipment(this.player, mod.InventorySlots.GadgetOne), undefined); // remove gadget one from player
-            Utility.safeCall( () => mod.RemoveEquipment(this.player, mod.InventorySlots.GadgetTwo), undefined); // remove gadget two from player
-            Utility.safeCall( () => mod.RemoveEquipment(this.player, mod.InventorySlots.ClassGadget), undefined); // remove class gadget from player
-            Utility.safeCall( () => mod.RemoveEquipment(this.player, mod.InventorySlots.MiscGadget), undefined); // remove misc gadget from player
+            mod.RemoveEquipment(this.player, mod.InventorySlots.PrimaryWeapon); // remove primary weapon from player
+            mod.RemoveEquipment(this.player, mod.InventorySlots.SecondaryWeapon); // remove secondary weapon from player
+            mod.RemoveEquipment(this.player, mod.InventorySlots.Throwable); // remove thrown weapon from player
+            mod.RemoveEquipment(this.player, mod.InventorySlots.MeleeWeapon); // remove melee weapon from player
+            mod.RemoveEquipment(this.player, mod.InventorySlots.GadgetOne); // remove gadget one from player
+            mod.RemoveEquipment(this.player, mod.InventorySlots.GadgetTwo); // remove gadget two from player
+            mod.RemoveEquipment(this.player, mod.InventorySlots.ClassGadget); // remove class gadget from player
+            mod.RemoveEquipment(this.player, mod.InventorySlots.MiscGadget); // remove misc gadget from player
 
             this.isArmed = false;   // prevent subsequent disarm calls
         }
@@ -901,10 +909,10 @@ export namespace SOCOM
             if (!this.isSealAlive())
                 return;
 
-            Utility.safeCall( () => mod.EnableInputRestriction(this.player, mod.RestrictedInputs.Jump, restrict), undefined); // ensure jump is disabled
-            Utility.safeCall( () => mod.EnableInputRestriction(this.player, mod.RestrictedInputs.MoveForwardBack, restrict), undefined); // ensure move forward/back is disabled
-            Utility.safeCall( () => mod.EnableInputRestriction(this.player, mod.RestrictedInputs.MoveLeftRight, restrict), undefined); // ensure move left/right is disabled
-            Utility.safeCall( () => mod.EnableInputRestriction(this.player, mod.RestrictedInputs.FireWeapon, restrict), undefined); // ensure weapon firing is disabled
+            mod.EnableInputRestriction(this.player, mod.RestrictedInputs.Jump, restrict); // ensure jump is disabled
+            mod.EnableInputRestriction(this.player, mod.RestrictedInputs.MoveForwardBack, restrict); // ensure move forward/back is disabled
+            mod.EnableInputRestriction(this.player, mod.RestrictedInputs.MoveLeftRight, restrict); // ensure move left/right is disabled
+            mod.EnableInputRestriction(this.player, mod.RestrictedInputs.FireWeapon, restrict); // ensure weapon firing is disabled
         }
 
         /* enables or disables spectator mode */
@@ -2728,20 +2736,20 @@ export namespace UI {
                         textSize: 24,
                         textAnchor: mod.UIAnchor.Center,
                         playerID: playerID
-                      },
-                      {
-                        name: "Container_PreviousPlayer_Outline",
-                        type: "Container",
-                        position: [0, 0],
-                        size: [100, 130],
-                        anchor: mod.UIAnchor.TopLeft,
-                        visible: true,
-                        padding: 0,
-                        bgColor: [1, 1, 1],
-                        bgAlpha: 0.3,
-                        bgFill: mod.UIBgFill.OutlineThin,
-                        playerID: playerID
                       }
+                      // {
+                      //   name: "Container_PreviousPlayer_Outline",
+                      //   type: "Container",
+                      //   position: [0, 0],
+                      //   size: [100, 130],
+                      //   anchor: mod.UIAnchor.TopLeft,
+                      //   visible: true,
+                      //   padding: 0,
+                      //   bgColor: [1, 1, 1],
+                      //   bgAlpha: 0.3,
+                      //   bgFill: mod.UIBgFill.OutlineThin,
+                      //   playerID: playerID
+                      // }
                     ]
                   },
                   {
@@ -2798,20 +2806,20 @@ export namespace UI {
                         textSize: 24,
                         textAnchor: mod.UIAnchor.Center,
                         playerID: playerID
-                      },
-                      {
-                        name: "Container_NextPlayer_Outline",
-                        type: "Container",
-                        position: [0, 0],
-                        size: [100, 130],
-                        anchor: mod.UIAnchor.TopLeft,
-                        visible: true,
-                        padding: 0,
-                        bgColor: [1, 1, 1],
-                        bgAlpha: 0.3,
-                        bgFill: mod.UIBgFill.OutlineThin,
-                        playerID: playerID
                       }
+                      //    {
+                      //      name: "Container_NextPlayer_Outline",
+                      //      type: "Container",
+                      //      position: [0, 0],
+                      //      size: [100, 130],
+                      //      anchor: mod.UIAnchor.TopLeft,
+                      //      visible: true,
+                      //      padding: 0,
+                      //      bgColor: [1, 1, 1],
+                      //      bgAlpha: 0.3,
+                      //      bgFill: mod.UIBgFill.OutlineThin,
+                      //      playerID: playerID
+                      //    }
                     ]
                   },
                   {
@@ -3037,15 +3045,5 @@ export namespace Utility {
             console.log(`Player ${playerID}: handled input via ${typeof state === 'boolean' ? 'boolean' : state} communication`);
             return true;
         }
-    }
-
-    // Simple utility for one-off wrapping
-    export function safeCall<T>(fn: () => T, fallback?: T): T | undefined {
-      try {
-        return fn();
-      } catch (error) {
-        console.error(`[!][safeCall]: ${error}`);
-        return fallback;
-      }
     }
 }
