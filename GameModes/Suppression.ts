@@ -27,13 +27,19 @@
 */
 import * as modlib from '../PortalSDK/code/modlib'; // for local testing
 // import * as modlib from 'modlib'; // required on server side
+const HQ = 1;
+const DEPLOY_CAMERA = 3;
+const PLAYER_SPAWNERS = 50; // 50 - 99 (Team Spawn Points)
 const AI_SPAWNERS = 100; // 100 - 101 (HQ AI) | 102 (HOSTAGE) | 103 (VIP) | 104 (BOMB)
 const WORLD_ICON_PLAYERS = 700; // 700 - 715
 const MIN_PLAYERS_TO_START = 1; // minimum players required to start the match
 const MAX_PLAYERS_FOR_BOTS = 8; // maximum players before bots are removed
 const MAX_PLAYERS = 32;
 const MAX_PLAYERS_PER_TEAM = MAX_PLAYERS / 2;
-const END_ROUND_ON_LAST_ELIMINATED_PLAYER = true; // whether to end the round when the last player on a team is eliminated when bots are backfilling empty player slots
+const END_ROUND_ON_LAST_ELIMINATED_PLAYER = false; // whether to end the round when the last player on a team is eliminated when bots are backfilling empty player slots
+
+
+let bInputMode = false; // used for tracking the state of UI input mode
 
 ////////////////////////////////// PLAYER EVENTS ///////////////////////////////////////
 
@@ -58,7 +64,7 @@ export function OnPlayerDeployed(eventPlayer: mod.Player): void
 // This will trigger when the Player dies and returns to the deploy screen.
 export function OnPlayerUndeploy(eventPlayer: mod.Player): void 
 { 
-    return SOCOM.CZMatchData.OnPlayerReturnedToDeployScreen(eventPlayer);
+    return SOCOM.CZMatchData.OnPlayerUndeployed(eventPlayer);
 }
 
 // This will trigger when an AISpawner spawns an AI Soldier.
@@ -110,7 +116,7 @@ export async function OnGameModeStarted()
     //      mod.AISetUnspawnOnDead(spawner, true); // set spawners to unspawn bots on death
 
     /* set default camera for all players to third person */
-    mod.SetCameraTypeForAll(mod.Cameras.ThirdPerson, 0);
+    mod.SetCameraTypeForAll(mod.Cameras.ThirdPerson, SOCOM.SoldierCameraView.RightShoulder);
 
     /// @BUG: deployed camera is offset incorrectly , reset its transform
     //  const deployCam = mod.GetSpatialObject(1003);
@@ -174,16 +180,26 @@ export function OngoingGlobal(): void
     // Update score widget UI
     UI.RoundInfoWidget.update();
 
-    // Check all players for camera updates (runs every frame)
+    // update all player instances
     for (let player of SOCOM.CZSeal.sealObjects)
     {
         let seal = SOCOM.CZSeal.get(player, undefined);
-        if (!seal || !seal.isValid())
+        if (!seal)
             continue;
 
-        /* update camera state */
+        /* update seal state */
         seal.update();
     }
+}
+
+
+export function OnPlayerUIButtonEvent(player: mod.Player, widget: any, event: any)
+{
+    let seal = SOCOM.CZSeal.get(player, undefined);
+    if (!seal)
+        return;
+
+    seal.spectateCamera?.onUIButtonEvent(widget, event);
 }
 
 
@@ -205,7 +221,6 @@ export namespace SOCOM
         cameraType: mod.Cameras; // current camera type
         attachedPlayer: mod.Player; // attached player 
         viewType: SoldierCameraView; // current view type
-        isSpectateMode: boolean = false; // whether the camera is in spectate mode
         isSpectatingPlayer: boolean = false; // whether the camera is in spectating mode
         isZooming: boolean = false; // whether the player is currently zooming
 
@@ -222,20 +237,22 @@ export namespace SOCOM
           this.spectateUI = undefined as any;
         }
 
+        /* updates the camera instance */
         update():void
         {
-            this.updateCameraView();
+            this.updateCameraView(this.isSpectatingPlayer ? this.attachedPlayer : this.sealPlayer.player);
         }
 
-        updateCameraView(): void
+        /* updates the camera view based on zoom state and shoulder view */
+        private updateCameraView(player: mod.Player): void
         {
             /* get zoom state */
-            let isCurrentlyZooming = mod.GetSoldierState(this.sealPlayer.player, mod.SoldierStateBool.IsZooming);
+            let isCurrentlyZooming = mod.GetSoldierState(player, mod.SoldierStateBool.IsZooming);
             if (isCurrentlyZooming == this.isZooming)
                 return;
 
             /* detect zoom pattern for shoulder switching */
-            if (this.sealPlayer.inputDetector.dtcInput(this.sealPlayer.player, isCurrentlyZooming))
+            if (this.sealPlayer.inputDetector.dtcInput(player, isCurrentlyZooming))
                 this.switchShoulderView();
 
             /* set zoom state */
@@ -246,61 +263,124 @@ export namespace SOCOM
             mod.SetCameraTypeForPlayer(this.sealPlayer.player, this.isZooming ? mod.Cameras.FirstPerson : mod.Cameras.ThirdPerson, currentShoulder);
         }
 
-        enterSpectatorMode(): void
+        /* sets up the spectator mode for the player */
+        async enterSpectatorMode(): Promise<void>
         {
-          /* find closest alive player to spectate */
-          let closestPlayer = mod.ClosestPlayerTo(this.sealPlayer.soldierTM.location, mod.GetTeam(this.sealPlayer.teamID)); // find closest team player
-          if (!closestPlayer)
-            return;
+            /* find closest alive player to spectate */
+            let closestPlayer = mod.ClosestPlayerTo(this.sealPlayer.soldierTM.location, mod.GetTeam(this.sealPlayer.teamID)); // find closest team player
+            if (!closestPlayer)
+            {
+                console.log(`[CZCamera::enterSpectatorMode] No alive players to spectate for player ${this.sealPlayer.playerID}`);
+                return;
+            }
 
-          /* RESTRICT PLAYER INPUTS */
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.MoveForwardBack, true);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.MoveLeftRight, true);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.CameraPitch, true);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.CameraYaw, true);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Crouch, true);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Jump, true);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Prone, true);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Interact, true);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.FireWeapon, true);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.FireWeapon, true);
+            /* RESTRICT PLAYER INPUTS */
+            mod.EnableAllInputRestrictions(this.sealPlayer.player, true);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Jump, true), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Prone, true), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Crouch, true), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Interact, true), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.CameraYaw, true), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.FireWeapon, true), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.FireWeapon, true), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.CameraPitch, true), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.MoveLeftRight, true), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.MoveForwardBack, true), undefined);
+            await mod.Wait(0.1); // small delay to ensure inputs are disabled
 
-          try {
             /* remove equipment */
-            this.sealPlayer.Disarm();
-          }
-          catch (e) {}
+            this.sealPlayer.Disarm(), undefined;
+            await mod.Wait(0.1); // small delay to ensure disarm is processed
 
-          this.isSpectateMode = true;
+            this.isSpectatingPlayer = true;
 
-          this.AttachToPlayer(closestPlayer); // attach to closest player
+            await this.AttachToPlayer(closestPlayer); // attach to closest player
 
-          mod.EnableUIInputMode(true);  // enable UI input mode
+            mod.EnableUIInputMode(true);  // enable UI input mode
+            this.sealPlayer.spectateCamera?.toggleVisible(true);
+            console.log(`[CZCamera::enterSpectatorMode] Player ${this.sealPlayer.playerID} has entered spectator mode, spectating player ${mod.GetObjId(closestPlayer)}`);
         }
 
-        exitSpectatorMode(): void
+        /* exits spectator mode and returns control to the player */
+        async exitSpectatorMode(): Promise<void>
         {
-          /* UNRESTRICT PLAYER INPUTS */
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.MoveForwardBack, false);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.MoveLeftRight, false);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.CameraPitch, false);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.CameraYaw, false);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Crouch, false);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Jump, false);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Prone, false);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Interact, false);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.FireWeapon, false);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.FireWeapon, false);
+            /* UNRESTRICT PLAYER INPUTS */
+            mod.EnableAllInputRestrictions(this.sealPlayer.player, false);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Jump, false), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Prone, false), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Crouch, false), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Interact, false), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.CameraYaw, false), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.FireWeapon, false), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.FireWeapon, false), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.CameraPitch, false), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.MoveLeftRight, false), undefined);
+            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.MoveForwardBack, false), undefined);
+            await mod.Wait(0.1); // small delay to ensure inputs are re-enabled
 
+            this.isSpectatingPlayer = false;
 
-          this.isSpectateMode = false;
+            await this.AttachToPlayer(this.sealPlayer.player); // reattach to self
 
-          this.AttachToPlayer(this.sealPlayer.player); // reattach to self
+            this.sealPlayer.spectateCamera?.toggleVisible(false);
+            mod.EnableUIInputMode(false);  // disable UI input mode
+            await mod.Wait(0.5); // small delay to ensure camera controls are hidden
 
-          mod.EnableUIInputMode(false);  // disable UI input mode
+            console.log(`[CZCamera::exitSpectatorMode] Player ${this.sealPlayer.playerID} has exited spectator mode`);
         }
 
-        AttachToPlayer(player: mod.Player): void
+        /* switch to the next player to spectate */
+        async nextSpectateTarget(): Promise<void>
+        {
+            // Get alive players for team
+            let alivePlayers = CZMatchData.getAlivePlayers(this.sealPlayer.playerTeam);
+            if (!alivePlayers || alivePlayers.length === 0)
+            {
+                // No alive players to spectate , should probably disable spectate mode
+                await this.exitSpectatorMode();
+                
+                mod.UndeployPlayer(this.sealPlayer.player); // return to deploy screen
+                await mod.Wait(0.1); // small delay to ensure undeploy is processed
+                
+                console.log(`[CZCamera::nextSpectateTarget] No alive players to spectate for player ${this.sealPlayer.playerID}`);
+                return;
+            }
+
+            let szArray = alivePlayers.length;
+            let currentIndex = alivePlayers.indexOf(this.attachedPlayer);
+            let nextIndex = (currentIndex + 1) % szArray;
+            let nextPlayer = alivePlayers[nextIndex];
+            await this.AttachToPlayer(nextPlayer);
+            console.log(`[CZCamera::nextSpectateTarget] Player ${this.sealPlayer.playerID} is now spectating player ${mod.GetObjId(nextPlayer)}`);
+        }
+
+        /* switches to the next alive player to spectate */
+        async prevSpectateTarget(): Promise<void>
+        {
+            // Get alive players for team
+            let alivePlayers = CZMatchData.getAlivePlayers(this.sealPlayer.playerTeam);
+            if (!alivePlayers || alivePlayers.length === 0)
+            {
+                // No alive players to spectate , should probably disable spectate mode
+                await this.exitSpectatorMode();
+
+                mod.UndeployPlayer(this.sealPlayer.player); // return to deploy screen
+                await mod.Wait(0.1); // small delay to ensure undeploy is processed
+                
+                console.log(`[CZCamera::prevSpectateTarget] No alive players to spectate for player ${this.sealPlayer.playerID}`);
+                return;
+            }
+
+            let szArray = alivePlayers.length;
+            let currentIndex = alivePlayers.indexOf(this.attachedPlayer);
+            let prevIndex = (currentIndex - 1 + szArray) % szArray;
+            let prevPlayer = alivePlayers[prevIndex];
+            await this.AttachToPlayer(prevPlayer);
+            console.log(`[CZCamera::prevSpectateTarget] Player ${this.sealPlayer.playerID} is now spectating player ${mod.GetObjId(prevPlayer)}`);
+        }
+
+        /* attaches the camera to the specified player */
+        private async AttachToPlayer(player: mod.Player): Promise<void>
         {
           /*
             ========== Start ==========
@@ -317,7 +397,15 @@ export namespace SOCOM
             /* SET CAMERA TARGET TO PLAYER */
 
             //@ ts-ignore
-            mod.SetCameraTargetForPlayer(this.sealPlayer, player);
+            mod.SetCameraTargetForPlayer(this.sealPlayer.player, player);
+
+            /* RESET CAMERA TYPES */
+            mod.SetCameraTypeForPlayer(this.sealPlayer.player, mod.Cameras.ThirdPerson, SoldierCameraView.LeftShoulder);
+            await mod.Wait(0.1);
+            mod.SetCameraTypeForPlayer(this.sealPlayer.player, mod.Cameras.FirstPerson);
+            await mod.Wait(0.1);
+            mod.SetCameraTypeForPlayer(this.sealPlayer.player, mod.Cameras.ThirdPerson, SoldierCameraView.RightShoulder);
+            await mod.Wait(0.1);
 
             /* UPDATE FLAG */
             this.isSpectatingPlayer = this.attachedPlayer !== this.sealPlayer.player;
@@ -463,15 +551,20 @@ export namespace SOCOM
         teamIcon: mod.WorldIcon;
         soldierTM: CZSoldierTM;
         hasSpawned: boolean = false;
+        shouldSpectateOnNextSpawn: boolean = false;
         isAlive: boolean = false;
         maxHealth = 100; // AI get 200 health , players get 100
         currentHealth = 100;
         isArmed: boolean = true;
+        isSpectator: boolean = false;
 
         // zoom pattern detection for shoulder switching
         inputDetector = new Utility.Input();
 
         camera: CZCamera;
+                
+        // Per-player Spectate Camera UI (only for players who are dead)
+        spectateCamera?: UI.SpectateCamWidget;
 
         welcomeUI;
 
@@ -496,6 +589,11 @@ export namespace SOCOM
                 this.spawner = spawner;
 
             this.welcomeUI = undefined as any;
+            
+            // Only create SpectateCamWidget for non-AI players
+            if (!this.isAI) {
+                this.spectateCamera = new UI.SpectateCamWidget(this);
+            }
 
             mod.SetWorldIconText(this.teamIcon, mod.Message("{}", this.player));
             mod.SetWorldIconOwner(this.teamIcon, this.playerTeam);
@@ -520,7 +618,7 @@ export namespace SOCOM
                 {
                     seal = new CZSeal(player, spawner);
                     CZSeal.#allSealPlayers[playerID] = seal;
-                    console.log(`Created CZSeal for Player ID: ${playerID} | TeamID: ${seal.teamID} | isAI: ${seal.isAI}`);
+                    console.log(`[CZSeal::get] Created CZSeal for Player ID: ${playerID} | TeamID: ${seal.teamID} | isAI: ${seal.isAI}`);
                 }
 
                 return seal;
@@ -535,7 +633,7 @@ export namespace SOCOM
             if (playerID <= -1)
                 return;
 
-            console.log(`Removing CZSeal for Player ID: ${playerID}`);
+            console.log(`[CZSeal::remove] Removing CZSeal for Player ID: ${playerID}`);
 
             // Remove from the players dictionary
             let seal = this.#allSealPlayers[playerID];
@@ -564,7 +662,7 @@ export namespace SOCOM
             return this.#allSealPlayers[playerID];
         }
 
-        /* call in game update to update camera state */
+        /* call in game update to update seal state */
         update(): void
         {
             if (!this.isSealValid())
@@ -575,7 +673,23 @@ export namespace SOCOM
 
             /* update camera state */
             if (!this.isAI)
-              this.camera.update();
+                this.camera.update();
+
+            if (this.isSpectator)
+            {
+
+                // update spectate widget name tag
+                this.spectateCamera?.update();
+
+
+                //  let spawnOrigin = CZMatchData.spawnOrigins[this.teamID - 1];
+                //  let oX = mod.XComponentOf(spawnOrigin);
+                //  let oY = mod.YComponentOf(spawnOrigin);
+                //  let oZ = mod.ZComponentOf(spawnOrigin);
+                //  this.setWorldPosition(mod.CreateVector(oX, oY, oZ)); // move spectator out of view
+
+                return;
+            }
 
             /* update name tag icon */
             this.updateIcon();
@@ -616,7 +730,7 @@ export namespace SOCOM
             //  let closestSeal = CZSeal.get(closestPlayer, undefined);
             //  if (!closestSeal || !closestSeal.isSealAlive())
             //      return;
-//  
+            //  
             //  mod.AILOSMoveToBehavior(this.player, closestSeal.soldierTM.location); // move to closest enemy player
             //  this.lastAIPathUpdateTime = currentTime;
         }
@@ -642,7 +756,7 @@ export namespace SOCOM
                 return;
 
             this.stats.assists[0]++;
-            console.log(`Player ${this.playerID} earned an assist on Player ${victim.playerID}`);
+            console.log(`[CZSeal::OnEarnedAssist] Player ${this.playerID} earned an assist on Player ${victim.playerID}`);
             mod.DisplayHighlightedWorldLogMessage(mod.Message("elimination assist"), this.player);
         }
 
@@ -663,7 +777,7 @@ export namespace SOCOM
             /* check for self-harm */
             if (this.playerID === shooter.playerID)
             {
-                console.log(`Player ${shooter.playerID} hit themselves`);
+                console.log(`[CZSeal::OnPlayerDamaged] Player ${shooter.playerID} hit themselves`);
                 return;
             }
 
@@ -673,7 +787,7 @@ export namespace SOCOM
             {
                 shooter.stats.shotsOnFriendly[0]++; // increment shots on friendly count
                 this.stats.shotsTakenByFriendly[0]++; // increment shots taken by friendly count
-                console.log(`Player ${shooter.playerID} hit friendly Player ${this.playerID}`);
+                console.log(`[CZSeal::OnPlayerDamaged] Player ${shooter.playerID} hit friendly Player ${this.playerID}`);
                 mod.DisplayHighlightedWorldLogMessage(mod.Message("FRIENDLY FIRE!"), shooter.player); // warn player about friendly fire
 
                 /* HANDLE EXCESSIVE FRIENDLY FIRE */
@@ -682,7 +796,7 @@ export namespace SOCOM
                 {
                     //  mod.Heal(this.player, damageReceived); // heal the victim
                     mod.DealDamage(shooter.player, damageReceived); // deal damage back to the shooter
-                    console.log(`Player ${shooter.playerID} penalized with ${damageReceived.toFixed(1)} damage for excessive friendly fire`);
+                    console.log(`[CZSeal::OnPlayerDamaged] Player ${shooter.playerID} penalized with ${damageReceived.toFixed(1)} damage for excessive friendly fire`);
                 }
 
                 return; // don't count friendly fire as a hit
@@ -697,35 +811,58 @@ export namespace SOCOM
                 shooter.stats.headshots[0]++; // increment headshot count if headshot
 
             // log damage info
-            console.log(`Player ${shooter.playerID} damaged Player ${this.playerID} for ${damageReceived.toFixed(1)} damage`);
+            console.log(`[CZSeal::OnPlayerDamaged] Player ${shooter.playerID} damaged Player ${this.playerID} for ${damageReceived.toFixed(1)} damage`);
             // mod.DisplayHighlightedWorldLogMessage(mod.Message("{}", damageReceived.toFixed(1)), shooter.player);
         }
 
         /* triggered when the player dies */
         OnPlayerDied(eventDeathType: mod.DeathType, eventOtherPlayer: mod.Player | undefined): void
         {
-            //  mod.SetCameraTypeForPlayer(this.player, mod.Cameras.Free); // set death camera
-
+            console.log(`[CZSeal::OnPlayerDied] Player ${this.playerID} OnPlayerDied called on seal instance ${this.playerID}: isAlive=${this.isAlive}, hasSpawned=${this.hasSpawned}`);
+            
             if (!this.isAlive)
-                return;
+            {
+                /* shouldn't happen , but just in case. previously checked in CZMatchData::OnPlayerDied */
+                console.log(`[CZSeal::OnPlayerDied] Player ${this.playerID} death ignored (already dead)`);
+                return; // skip players who have already died
+            }
 
+            /* set death state */
             this.isAlive = false;
             this.stats.deaths[0]++;
             this.currentHealth = 0;
             mod.EnableWorldIconText(this.teamIcon, false);
+            
+            // Set flag for spectator mode on next spawn (only for human players)
+            if (!this.isAI) {
+                this.shouldSpectateOnNextSpawn = true;
+            }
+            
+            console.log(`[CZSeal::OnPlayerDied] Player ${this.playerID} death state set: isAlive=${this.isAlive}, hasSpawned=${this.hasSpawned}, shouldSpectateOnNextSpawn=${this.shouldSpectateOnNextSpawn}`);
 
             /* get killer seal instance */
             let killerSeal = CZSeal.get(eventOtherPlayer as mod.Player, undefined);
-            if (!killerSeal || !killerSeal.isAlive) // killer is not alive , ignore
+            if (!killerSeal) // killer is not alive , ignore
+            {
+                console.log(`[CZSeal::OnPlayerDied] Player ${this.playerID} died (no other player involved)`);
                 return;
+            }
 
             /* check for self-harm */
-            if (killerSeal === this)
+            if (killerSeal.playerID === this.playerID)
             {
                 // @TODO: negate score for self-kill
-                console.log(`Player ${killerSeal.playerID} killed themselves`);
-                //  log.info(mod.Message("{} killed themselves", killerSeal.player));
+                console.log(`[CZSeal::OnPlayerDied] Player ${killerSeal.playerID} ended their own life.`);
+                // Still need to set the player as dead even for self-harm
+                // Note: isAlive and stats.deaths were already set at the top of this method
                 return;
+            }
+
+            /* check if killer is alive */
+            if (!killerSeal.isAlive)
+            {
+                console.log(`[CZSeal::OnPlayerDied] Player ${this.playerID} death ignored (killer Player ${killerSeal.playerID} is not alive)`);
+                return; // skip if killer is not alive
             }
 
             /* check for friendly fire */
@@ -734,16 +871,15 @@ export namespace SOCOM
             {
                 killerSeal.stats.friendlyFireKills[0]++; // increment friendly fire kills count
                 this.stats.friendlyFireDeaths[0]++; // increment friendly fire deaths count
-                console.log(`Player ${killerSeal.playerID} team killed friendly Player ${this.playerID}`);
-                // log.info(mod.Message("{} team killed friendly Player {}", killerSeal.player, this.player)); : removed as hud will now display this
+                console.log(`[CZSeal::OnPlayerDied] Player ${killerSeal.playerID} team killed friendly Player ${this.playerID}`);
                 mod.DisplayNotificationMessage(mod.Message("FRIENDLY FIRE WILL NOT BE TOLERATED"), killerSeal.player);
 
                 /* HANDLE EXCESSIVE FRIENDLY FIRE */
                 let totalFriendlyFireKills = killerSeal.stats.friendlyFireKills[0] + killerSeal.stats.friendlyFireKills[1];
-                if (totalFriendlyFireKills > 2)
+                if (totalFriendlyFireKills >= 2)
                 {
                     mod.Kill(killerSeal.player); // kill the killer for excessive friendly fire
-                    console.log(`Player ${killerSeal.playerID} has been removed from the round for excessive friendly fire`);
+                    console.log(`[CZSeal::OnPlayerDied] Player ${killerSeal.playerID} has been removed from the round for excessive friendly fire`);
                     log.info(mod.Message("{} removed from play due to excessive friendly fire", killerSeal.player));
                     mod.DisplayNotificationMessage(mod.Message("FRIENDLY FIRE: YOU HAVE BEEN REMOVED FROM PLAY"), killerSeal.player);
                 }
@@ -755,10 +891,8 @@ export namespace SOCOM
             if (mod.EventDeathTypeCompare(eventDeathType, mod.PlayerDeathTypes.Headshot))
                 killerSeal.stats.headshotKills[0]++;
 
-            mod.DisplayNotificationMessage(mod.Message("You will respawn next round"), this.player);
-            console.log(`Player ${killerSeal.playerID} eliminated Player ${this.playerID}`);
-            //  log.info(mod.Message("{} eliminated {}", killerSeal.player, this.player));
-            // mod.DisplayHighlightedWorldLogMessage(mod.Message("elimination"), killerSeal.player);
+            mod.DisplayNotificationMessage(mod.Message("REDEPLOY TO SPECTATE"), this.player);
+            console.log(`[CZSeal::OnPlayerDied] Player ${killerSeal.playerID} eliminated Player ${this.playerID}`);
         }
 
         /* ACTIONS */
@@ -793,14 +927,17 @@ export namespace SOCOM
             mod.EnableInputRestriction(this.player, mod.RestrictedInputs.FireWeapon, restrict); // ensure weapon firing is disabled
         }
 
+        /* enables or disables spectator mode */
+        async SetSpectatorMode(spectate: boolean): Promise<void>
+        {
+            if (this.isAI)
+                return;
+
+            this.isSpectator = spectate;
+            spectate ? await this.camera.enterSpectatorMode() : await this.camera.exitSpectatorMode();
+        }
 
         /* UTILITY METHODS */
-
-        /* checks if the player is alive */
-        isValid(): boolean
-        {
-            return mod.GetSoldierState(this.player, mod.SoldierStateBool.IsAlive);
-        }
 
         /* returns the player name */
         getPlayerName(): mod.Message
@@ -847,7 +984,6 @@ export namespace SOCOM
             if (!this.isAI)
                 return;
 
-
             mod.AIEnableShooting(this.player, attack);
             mod.AIEnableTargeting(this.player, attack);
 
@@ -863,7 +999,7 @@ export namespace SOCOM
             }
         }
 
-        /* checks if the soldier is valid */
+        /* checks if the soldier is valid and alive */
         isSealValid(): boolean
         {
             return this.isSealAlive() && mod.IsPlayerValid(this.player);
@@ -898,7 +1034,9 @@ export namespace SOCOM
         static bots: number = 0; // number of AI bots in the match
         static teams: number[] = [0, 0]; // number of players per team [team1, team2]
         static botIDs: number[] = []; // list of bot player IDs in the match
+        static HeadQuarters: mod.Object[] = []; // list of HQ objects in the map 
         static botSpawners: mod.Spawner[] = []; // list of bot spawners in the map
+        static spawnOrigins: mod.Vector[] = []; // list of spawn origins for each team
         static isSpawnModeEnabled: boolean = false; // whether spawn mode is enabled [ determnined via obtaining bot spawners in the map ]
 
         // SUPPRESSION DATA
@@ -917,7 +1055,24 @@ export namespace SOCOM
             CZMatchData.hostID = mod.GetObjId(host);
             CZMatchData.players++; // increment player count for human players
             CZMatchData.teams[mod.GetObjId(mod.GetTeam(host)) - 1]++; // increment team player count for human players
-            CZMatchData.botSpawners = [mod.GetSpawner(AI_SPAWNERS), mod.GetSpawner(AI_SPAWNERS + 1)]; // get bot spawners for each team
+            for (let i = 0; i < 2; i++)
+            {
+                let botSpawner = mod.GetSpawner(AI_SPAWNERS + i);
+                if (botSpawner)
+                {
+                    let spawnOrigin = mod.GetObjectPosition(botSpawner);
+                    CZMatchData.spawnOrigins.push(spawnOrigin);
+                    CZMatchData.botSpawners.push(botSpawner); // get bot spawners for each team
+
+                }
+                let hq = mod.GetHQ(HQ + i);
+                if (hq)
+                {
+                    let spawnOrigin = mod.GetObjectPosition(hq);
+                    CZMatchData.spawnOrigins.push(spawnOrigin);
+                    CZMatchData.HeadQuarters.push(hq); // get HQ objects for each team
+                }
+            }
             CZMatchData.isSpawnModeEnabled = mod.GetObjId(CZMatchData.botSpawners[0]) !== -1 && mod.GetObjId(CZMatchData.botSpawners[1]) !== -1;
         }
 
@@ -934,7 +1089,7 @@ export namespace SOCOM
             CZMatchData.scores = [0, 0];
             CZMatchData.teams = [0, 0];
             CZMatchData.botIDs = [];
-            console.log("Match data reset");
+            console.log("[CZMatchData::reset] Match data reset");
         }
 
         /* main update loop for the match */
@@ -957,7 +1112,7 @@ export namespace SOCOM
             let timeLeft = CZMatchData.roundTime;
             let minutes = Math.floor(timeLeft / 60);
             let seconds = timeLeft % 60;
-            console.log(`Match State: ${GameState[CZMatchData.state]} | Round: ${CZMatchData.roundNum}/${CZMatchData.roundMax} | Time Left: ${minutes}:${seconds.toString().padStart(2, '0')} | Score: ${CZMatchData.scores[0]} - ${CZMatchData.scores[1]} | Players: ${CZMatchData.players} (Bots: ${CZMatchData.bots})`);
+            console.log(`[CZMatchData::update] Match State: ${GameState[CZMatchData.state]} | Round: ${CZMatchData.roundNum}/${CZMatchData.roundMax} | Time Left: ${minutes}:${seconds.toString().padStart(2, '0')} | Score: ${CZMatchData.scores[0]} - ${CZMatchData.scores[1]} | Players: ${CZMatchData.players} (Bots: ${CZMatchData.bots})`);
             await mod.Wait(1); // wait 1 second before next update
         }
 
@@ -1022,7 +1177,7 @@ export namespace SOCOM
             CZMatchData.scores = [0, 0];
             CZMatchData.matchTime = 0;
 
-            console.log("Starting Match");
+            console.log("[CZMatchData::startMatch] Starting Match");
 
             await CZMatchData.preRound(); // start the first round immediately
         }
@@ -1030,11 +1185,11 @@ export namespace SOCOM
         /* ends the match and displays final scores */
         static  async endMatch(): Promise<void>
         {
-            mod.DisplayNotificationMessage(mod.Message("Final Score: {} - {}", CZMatchData.scores[0], CZMatchData.scores[1]));
+            mod.DisplayNotificationMessage(mod.Message("FINAL SCORE: {} - {}", CZMatchData.scores[0], CZMatchData.scores[1]));
             CZMatchData.state = GameState.MatchEnd;
 
             // log seal stats
-            console.log(`SEALS Rounds Won: ${CZMatchData.scores[0]}`);
+            console.log(`[CZMatchData::endMatch] SEALS Rounds Won: ${CZMatchData.scores[0]}`);
             for (let player of CZSeal.sealObjects)
             {
                 let seal = CZSeal.get(player, undefined);
@@ -1043,13 +1198,13 @@ export namespace SOCOM
 
                 if (seal.teamID !== 1)
                     continue; // only log team 1 (SEALS) stats for now
-                console.log(`Player [${seal.playerID}] Stats: Kills: ${seal.stats.kills[1]}, Deaths: ${seal.stats.deaths[1]}, Headshots: ${seal.stats.headshots[1]}, Headhshot Kills: ${seal.stats.headshotKills[1]}, Shots on Friendly: ${seal.stats.shotsOnFriendly[1]}, Friendly Fire Kills: ${seal.stats.friendlyFireKills[1]}`);
+                console.log(`- Player [${seal.playerID}] Stats: Kills: ${seal.stats.kills[1]}, Deaths: ${seal.stats.deaths[1]}, Headshots: ${seal.stats.headshots[1]}, Headhshot Kills: ${seal.stats.headshotKills[1]}, Shots on Friendly: ${seal.stats.shotsOnFriendly[1]}, Friendly Fire Kills: ${seal.stats.friendlyFireKills[1]}`);
                 //  log.info(mod.Message("- {} Stats: Kills: {}, Deaths: {}", seal.player, seal.stats.kills[1], seal.stats.deaths[1]));
                 seal.stats.reset(); // reset all stats
             }
             //  log.info(mod.Message("SEALS Rounds Won: {}", CZMatchData.scores[0]));
 
-            console.log(`MERCS Rounds Won: ${CZMatchData.scores[1]}`);
+            console.log(`[CZMatchData::endMatch] MERCS Rounds Won: ${CZMatchData.scores[1]}`);
             for (let player of CZSeal.sealObjects)
             {
                 let seal = CZSeal.get(player, undefined);
@@ -1057,7 +1212,7 @@ export namespace SOCOM
                     continue;
                 if (seal.teamID !== 2)
                     continue; // only log team 2 (MERCS) stats for now
-                console.log(`Player [${seal.playerID}] Stats: Kills: ${seal.stats.kills[1]}, Deaths: ${seal.stats.deaths[1]}, Headshots: ${seal.stats.headshots[1]}, Headhshot Kills: ${seal.stats.headshotKills[1]}, Shots on Friendly: ${seal.stats.shotsOnFriendly[1]}, Friendly Fire Kills: ${seal.stats.friendlyFireKills[1]}`);
+                console.log(`- Player [${seal.playerID}] Stats: Kills: ${seal.stats.kills[1]}, Deaths: ${seal.stats.deaths[1]}, Headshots: ${seal.stats.headshots[1]}, Headhshot Kills: ${seal.stats.headshotKills[1]}, Shots on Friendly: ${seal.stats.shotsOnFriendly[1]}, Friendly Fire Kills: ${seal.stats.friendlyFireKills[1]}`);
                 //  log.info(mod.Message("- {} Stats: Kills: {}, Deaths: {}", seal.player, seal.stats.kills[1], seal.stats.deaths[1]));
                 seal.stats.reset(); // reset all stats
             }
@@ -1073,11 +1228,17 @@ export namespace SOCOM
         /* prepares for a new round */
         static  async preRound(): Promise<void>
         {
+            console.log(`[CZMatchData::preRound] Preparing for Round ${CZMatchData.roundNum + 1}`);
+         
             CZMatchData.state = GameState.PreRound; // transition to pre-round state
 
             mod.SetSpawnMode(mod.SpawnModes.AutoSpawn); // force auto spawn
             mod.EnableAllPlayerDeploy(true); // enable deploy for all players
-            mod.UndeployAllPlayers(); // undeploy all players for the next round
+            try {
+                mod.UndeployAllPlayers(); // undeploy all players for the next round
+            } catch (e) {
+                console.log(`[ERROR] failed to undeploy all players: ${e}`);
+            }
             await mod.Wait(3); // wait a few seconds for the game to do its undeploy logic
 
             /* respawn all players one at a time */
@@ -1088,8 +1249,17 @@ export namespace SOCOM
                     continue;
 
                 seal.hasSpawned = false;
+                seal.shouldSpectateOnNextSpawn = false;
                 seal.currentHealth = seal.maxHealth;
                 seal.isArmed = true;
+                console.log(`[CZMatchData::preRound] Reset Player ${seal.playerID}: hasSpawned=${seal.hasSpawned}, shouldSpectateOnNextSpawn=${seal.shouldSpectateOnNextSpawn}`);
+                
+                // Ensure player exits spectator mode for new round
+                if (seal.isSpectator && !seal.isAI) {
+                    await seal.SetSpectatorMode(false);
+                }
+                
+                await mod.Wait(0.2); // wait a bit between spawns for proper registration
 
                 /* set input restriction for pre-round */
                 seal.SetInputMode(true);
@@ -1125,8 +1295,8 @@ export namespace SOCOM
                     mercsToAdd = totalBotsNeeded - sealsToAdd;
                 }
 
-                console.log(`Planning to add ${totalBotsNeeded} bots total (SEALS: ${sealsToAdd}, MERCS: ${mercsToAdd})`);
-                console.log(`Current team counts - SEALS: ${CZMatchData.teams[0]}, MERCS: ${CZMatchData.teams[1]}`);
+                console.log(`[CZMatchData::preRound] Planning to add ${totalBotsNeeded} bots total (SEALS: ${sealsToAdd}, MERCS: ${mercsToAdd})`);
+                console.log(`[CZMatchData::preRound] Current team counts - SEALS: ${CZMatchData.teams[0]}, MERCS: ${CZMatchData.teams[1]}`);
 
                 // Add bots to SEALS team
                 for (let i = 0; i < sealsToAdd; i++)
@@ -1142,7 +1312,7 @@ export namespace SOCOM
                     await mod.Wait(0.2); // wait a bit between spawns for proper registration
                 }
 
-                console.log(`Bot spawning complete. Total players: ${CZMatchData.players}, Bots: ${CZMatchData.bots}`);
+                console.log(`[CZMatchData::preRound] Bot spawning complete. Total players: ${CZMatchData.players}, Bots: ${CZMatchData.bots}`);
             }
 
             mod.SetSpawnMode(mod.SpawnModes.Deploy); // restore normal spawn mode
@@ -1150,14 +1320,12 @@ export namespace SOCOM
             await mod.Wait(5); // wait a few seconds before starting the round
 
             CZMatchData.startRound(); // start a new round
-
-            console.log(`Preparing for Round ${CZMatchData.roundNum}`);
         }
 
         /* starts a new round */
         static  startRound(): void
         {
-            mod.EnableAllPlayerDeploy(false); // disable redeployment for all players
+            //  mod.EnableAllPlayerDeploy(false); // disable redeployment for all players
 
             /* disable player input restrictions */
             for (let player of CZSeal.sealObjects)
@@ -1178,7 +1346,7 @@ export namespace SOCOM
 
             CZMatchData.roundNum++;
             CZMatchData.roundTime = CZMatchData.roundTimeMax;
-            mod.DisplayNotificationMessage(mod.Message("Round {} of {} started", CZMatchData.roundNum, CZMatchData.roundMax));
+            mod.DisplayNotificationMessage(mod.Message("ROUND {} OF {} STARTED", CZMatchData.roundNum, CZMatchData.roundMax));
             CZMatchData.state = GameState.RoundActive;
         }
 
@@ -1187,25 +1355,27 @@ export namespace SOCOM
         {
             CZMatchData.state = GameState.RoundEnd;
 
+            mod.EnableAllPlayerDeploy(false); // disable redeployment for all players
+
             // Update scores
             if (winner)
             {
                 CZMatchData.scores[winner - 1]++;
-                mod.DisplayNotificationMessage(mod.Message("{} win round {}", CZMatchData.getTeamName(winner - 1), CZMatchData.roundNum));
+                mod.DisplayNotificationMessage(mod.Message("{} WIN ROUND {}", CZMatchData.getTeamName(winner - 1), CZMatchData.roundNum));
             }
             else
-                mod.DisplayNotificationMessage(mod.Message("Round {} ended in a draw", CZMatchData.roundNum));
+                mod.DisplayNotificationMessage(mod.Message("ROUND {} ENDED IN A DRAW", CZMatchData.roundNum));
 
             await mod.Wait(8); // wait a few seconds before performing end round logic ( allow players to perform end of round actions such as dancing , emotes , etc. )
 
 
-            console.log(`Round ${CZMatchData.roundNum} ended. Winner: ${winner === 0 ? 'Draw' : CZMatchData.getTeamName(winner - 1)} | Score: ${CZMatchData.scores[0]} - ${CZMatchData.scores[1]}`);
+            console.log(`[CZMatchData::endRound] Round ${CZMatchData.roundNum} ended. Winner: ${winner === 0 ? 'Draw' : CZMatchData.getTeamName(winner - 1)} | Score: ${CZMatchData.scores[0]} - ${CZMatchData.scores[1]}`);
 
             /* collect bot IDs before cleanup and reset round stats */
             let botsToRemove: number[] = [];
 
             /* log seal stats */
-            console.log("SEALS");
+            console.log(`[CZMatchData::endRound] SEALS`);
             for (let player of CZSeal.sealObjects)
             {
                 let seal = CZSeal.get(player, undefined);
@@ -1214,7 +1384,7 @@ export namespace SOCOM
 
                 if (seal.teamID !== 1)
                     continue; // only log team 1 (SEALS) stats for now
-                console.log(`Player [${seal.playerID}][${seal.getHealthPercent().toFixed(0)}%] Stats: Kills: ${seal.stats.kills[0]}, Deaths: ${seal.stats.deaths[0]}, Headshots: ${seal.stats.headshots[0]}, Headhshot Kills: ${seal.stats.headshotKills[0]}, Shots on Friendly: ${seal.stats.shotsOnFriendly[0]}, Friendly Fire Kills: ${seal.stats.friendlyFireKills[0]}`);
+                console.log(`- Player [${seal.playerID}][${seal.getHealthPercent().toFixed(0)}%] Stats: Kills: ${seal.stats.kills[0]}, Deaths: ${seal.stats.deaths[0]}, Headshots: ${seal.stats.headshots[0]}, Headhshot Kills: ${seal.stats.headshotKills[0]}, Shots on Friendly: ${seal.stats.shotsOnFriendly[0]}, Friendly Fire Kills: ${seal.stats.friendlyFireKills[0]}`);
                 seal.stats.resetRound(); // reset round stats
 
                 if (seal.isAI)
@@ -1223,11 +1393,14 @@ export namespace SOCOM
                     botsToRemove.push(seal.playerID); // collect bot for removal
                 }
                 else
+                {
+                    await seal.SetSpectatorMode(false);
                     seal.SetInputMode(true);
+                }
             }
 
             /* log merc stats */
-            console.log("MERCS");
+            console.log(`[CZMatchData::endRound] MERCS`);
             for (let player of CZSeal.sealObjects)
             {
                 let seal = CZSeal.get(player, undefined);
@@ -1235,7 +1408,7 @@ export namespace SOCOM
                     continue;
                 if (seal.teamID !== 2)
                     continue; // only log team 2 (MERCS) stats for now
-                console.log(`Player [${seal.playerID}][${seal.getHealthPercent().toFixed(0)}%] Stats: Kills: ${seal.stats.kills[0]}, Deaths: ${seal.stats.deaths[0]}, Headshots: ${seal.stats.headshots[0]}, Headhshot Kills: ${seal.stats.headshotKills[0]}, Shots on Friendly: ${seal.stats.shotsOnFriendly[0]}, Friendly Fire Kills: ${seal.stats.friendlyFireKills[0]}`);
+                console.log(`- Player [${seal.playerID}][${seal.getHealthPercent().toFixed(0)}%] Stats: Kills: ${seal.stats.kills[0]}, Deaths: ${seal.stats.deaths[0]}, Headshots: ${seal.stats.headshots[0]}, Headhshot Kills: ${seal.stats.headshotKills[0]}, Shots on Friendly: ${seal.stats.shotsOnFriendly[0]}, Friendly Fire Kills: ${seal.stats.friendlyFireKills[0]}`);
                 seal.stats.resetRound(); // reset round stats
 
                 if (seal.isAI)
@@ -1246,7 +1419,10 @@ export namespace SOCOM
                     }
                 }
                 else
+                {
+                    await seal.SetSpectatorMode(false);
                     seal.SetInputMode(true);
+                }
             }
 
             /* update team counts by removing all bots */
@@ -1275,7 +1451,7 @@ export namespace SOCOM
             else
             {
                 // @TODO: display scoreboard ui
-                mod.DisplayNotificationMessage(mod.Message("preparing for the next round"));
+                mod.DisplayNotificationMessage(mod.Message("PREPARING FOR THE NEXT ROUND"));
                 await mod.Wait(7); // wait a few seconds before preparing for the next round
                 await CZMatchData.preRound(); // prepare for the next round
             }
@@ -1311,11 +1487,11 @@ export namespace SOCOM
                 seal.isAlive = false; // set player as dead
                 seal.isArmed = true; // set flag so player is disarmed if a deployment happens to occur
                 mod.EnablePlayerDeploy(eventPlayer, false); // disable redeploy / respawn
-                console.log(`Player ${seal.playerID} joined during active match , set as dead`);
+                console.log(`[CZMatchData::OnPlayerJoined] Player ${seal.playerID} joined during active match , set as dead`);
                 return;
             }
 
-            console.log(`Player Joined: ID: ${seal.playerID} | TeamID: ${seal.teamID} | isAI: ${seal.isAI} | Total Clients: ${CZMatchData.players}`);
+            console.log(`[CZMatchData::OnPlayerJoined] Player Joined: ID: ${seal.playerID} | TeamID: ${seal.teamID} | isAI: ${seal.isAI} | Total Clients: ${CZMatchData.players}`);
         }
 
         /* triggered when a player leaves the game */
@@ -1337,7 +1513,7 @@ export namespace SOCOM
             CZMatchData.teams[seal.teamID - 1]--; // decrement team player count
 
             /* log event */
-            console.log(`Player Left: ID: ${seal.playerID} | TeamID: ${seal.teamID}`);
+            console.log(`[CZMatchData::OnPlayerLeft] Player Left: ID: ${seal.playerID} | TeamID: ${seal.teamID}`);
             log.info(mod.Message("{} left the game", seal.player));
 
             /* remove player */
@@ -1348,27 +1524,49 @@ export namespace SOCOM
         static OnPlayerSpawned(eventPlayer: mod.Player): void
         {
             /* players are only ever "deployed" via preRound() method , just before GameState.PreRound*/ 
-            if (CZMatchData.state !== GameState.PreRound)
-                return; // ignore spawns while waiting for players
+            switch (CZMatchData.state)
+            {
+                case GameState.WaitingForPlayers: return;
+                case GameState.PreRound: break; // valid state for spawning
+                case GameState.RoundActive: break; // valid state for spawning (e.g. auto-spawn)
+                case GameState.RoundEnd: return;
+                case GameState.MatchEnd: return;
+            }// ignore spawns while waiting for players
 
             let seal = CZSeal.get(eventPlayer, undefined);
             if (!seal)
                 return;
 
+            console.log(`[CZMatchData::OnPlayerSpawned] Player ${mod.GetObjId(eventPlayer)} got seal instance ${seal.playerID}`);
+
             seal.playerTeam = mod.GetTeam(eventPlayer); // update team
             seal.teamID = mod.GetObjId(seal.playerTeam); // update teamID
+
+            console.log(`[CZMatchData::OnPlayerSpawned] Player ${seal.playerID} spawn check: hasSpawned=${seal.hasSpawned}, isAlive=${seal.isAlive}, shouldSpectateOnNextSpawn=${seal.shouldSpectateOnNextSpawn}, gameState=${GameState[CZMatchData.state]}`);
+
+            /* check if player should go into spectator mode (died previously this round) */
+            /* Only trigger spectator mode during active rounds, not during preRound */
+            if (seal.shouldSpectateOnNextSpawn && !seal.isAI && CZMatchData.state === GameState.RoundActive)
+            {
+                console.log(`[CZMatchData::OnPlayerSpawned] Player ${seal.playerID} should spectate (died previously) for team ${seal.teamID} | isAI: ${seal.isAI} | isAlive: ${seal.isAlive}`);
+                seal.SetSpectatorMode(true);
+                seal.Disarm(); // disarm the player
+                return; // go to spectator mode
+            }
 
             /* seal already spawned for this round */
             if (seal.hasSpawned)
             {
-                seal.Disarm(); // disarm the player to prevent exploits
-                mod.UndeployPlayer(eventPlayer); // undeploy the player
+                console.log(`[CZMatchData::OnPlayerSpawned] Player ${seal.playerID} attempted to spawn again for team ${seal.teamID} | isAI: ${seal.isAI} | isAlive: ${seal.isAlive}`);
+                seal.SetSpectatorMode(true);
+                seal.Disarm(); // disarm the player
                 return; // already spawned
             }
 
             /* new round spawn , set player state */
 
             /* set seal state */
+            console.log(`[CZMatchData::OnPlayerSpawned] Player ${seal.playerID} setting hasSpawned = true (was ${seal.hasSpawned})`);
             seal.hasSpawned = true;
             seal.isAlive = true;
 
@@ -1381,7 +1579,7 @@ export namespace SOCOM
                 mod.SetCameraTypeForPlayer(seal.player, mod.Cameras.ThirdPerson, seal.camera.viewType === SoldierCameraView.RightShoulder ? 0 : 1);
             }
 
-            console.log(`Player ${seal.playerID} spawned for team ${seal.teamID} | isAI: ${seal.isAI}`);
+            console.log(`[CZMatchData::OnPlayerSpawned] Player ${seal.playerID} spawned for team ${seal.teamID} | isAI: ${seal.isAI} | hasSpawned: ${seal.hasSpawned} | isAlive: ${seal.isAlive}`);
         }
 
         /* triggered when a bot is spawned from a spawner */
@@ -1390,7 +1588,7 @@ export namespace SOCOM
             let soldier = CZSeal.get(eventPlayer, eventSpawner);
             if (!soldier)
             {
-                console.log(`Failed to register spawned bot from spawner ID: ${mod.GetObjId(eventSpawner)}`);
+                console.log(`[CZMatchData::OnSpawnBot] Failed to register spawned bot from spawner ID: ${mod.GetObjId(eventSpawner)}`);
                 return;
             }
 
@@ -1403,18 +1601,18 @@ export namespace SOCOM
             }
 
             soldier.setAIBehavior(false); // disable AI behavior initially
-            console.log(`Bot Spawned: ID ${soldier.playerID} | TeamID: ${soldier.teamID} | Total Bots: ${CZMatchData.bots} | Total Players: ${CZMatchData.players}`);
+            console.log(`[CZMatchData::OnSpawnBot] Bot Spawned: ID ${soldier.playerID} | TeamID: ${soldier.teamID} | Total Bots: ${CZMatchData.bots} | Total Players: ${CZMatchData.players}`);
         }
 
         /* triggered when a player returns to the deploy screen */
-        static OnPlayerReturnedToDeployScreen(eventPlayer: mod.Player): void
+        static OnPlayerUndeployed(eventPlayer: mod.Player): void
         {
             /* not invoked for bots , only human players */
             let seal = CZSeal.get(eventPlayer, undefined);
             if (!seal)
                 return;
 
-            console.log(`Player Undeployed: ID ${seal.playerID} | TeamID: ${seal.teamID} | isAI: ${seal.isAI}`);
+            console.log(`[CZMatchData::OnPlayerUndeployed] Player Undeployed: ID ${seal.playerID} | TeamID: ${seal.teamID} | isAI: ${seal.isAI}`);
         }
 
         /* triggered when a player is damaged */
@@ -1432,23 +1630,31 @@ export namespace SOCOM
         {
             /* get match data instance , only update if round is active */
             if (CZMatchData.state !== GameState.RoundActive)
+            {
+                console.log(`[MatchData::OnPlayerDied] Match not active , ignoring death event for player ID: ${mod.GetObjId(eventPlayer)}`);
                 return;
+            }
 
             /* get seal victim instance */
             let victim = CZSeal.get(eventPlayer, undefined);
             if (!victim)
                 return;
 
+            console.log(`[MatchData::OnPlayerDied] Player ${mod.GetObjId(eventPlayer)} got seal instance ${victim.playerID} for death event`);
+
             if (!victim.isAlive) // player already dead , ignore
             {
                 victim.isArmed = true; // prevent the player from deplying with a weapon
+                console.log(`[MatchData::OnPlayerDied] Player ${victim.playerID} already dead , ignoring death event`);
                 return;
             }
 
             /* ignore redeploy deaths */
             if (mod.EventDeathTypeCompare(eventDeathType, mod.PlayerDeathTypes.Redeploy))
+            {
+                console.log(`[MatchData::OnPlayerDied] Player ${victim.playerID} redeployed , ignoring death event`);
                 return;
-
+            }
             victim.OnPlayerDied(eventDeathType, eventOtherPlayer);
 
             // Note: Don't remove AI CZSeal instances here - they'll be cleaned up at round end
@@ -1848,7 +2054,6 @@ export namespace Logging {
 }
 const log = new Logging.Logger(Logging.LogLevel.Debug, 10, 10); // LogLevel, max visible messages, cleanup time in seconds
 
-
 // https://staging.d70cu09wjw7ws.amplifyapp.com/
 // https://discord.com/channels/870246147455877181/1428410039080718487
 export namespace UI {
@@ -2198,6 +2403,621 @@ export namespace UI {
             }
         }
     }
+
+    export class PlayerOriginWidget {
+        
+        OriginWidget: mod.UIWidget | undefined;
+        player: mod.Player;
+        locationText: mod.UIWidget | undefined;
+        rotationText: mod.UIWidget | undefined;
+        velocityText: mod.UIWidget | undefined;
+
+        constructor(player: mod.Player) {
+            this.player = player;
+            const playerID = mod.GetObjId(player);
+            
+            // Create unique widget names for this player instance
+            //  const containerName = `Container_PlayerInfo_${playerID}`;
+            //  const originName = `Text_Origin_${playerID}`;
+            //  const rotationName = `Text_Rotation_${playerID}`;
+            //  const velocityName = `Text_Velocity_${playerID}`;
+            
+            this.OriginWidget = modlib.ParseUI(
+              {
+                type: "Container",
+                name: "Container_PlayerInfo",
+                position: [-10, -20],
+                size: [400, 250],
+                anchor: mod.UIAnchor.TopRight,
+                visible: true,
+                textLabel: "",
+                textColor: [1, 1, 1],
+                textAlpha: 1,
+                textSize: 24,
+                textAnchor: mod.UIAnchor.Center,
+                padding: 0,
+                bgColor: [0.0314, 0.0431, 0.0431],
+                bgAlpha: 1,
+                bgFill: mod.UIBgFill.Blur,
+                imageType: mod.UIImageType.None,
+                imageColor: [1, 1, 1],
+                imageAlpha: 1,
+                buttonEnabled: false,
+                playerID: playerID,
+                children: [
+                  {
+                    type: "Text",
+                    name: "Text_Origin",
+                    position: [0, 0],
+                    size: [400, 50],
+                    anchor: mod.UIAnchor.TopLeft,
+                    visible: true,
+                    textLabel: "Origin: x, y, z",
+                    textColor: [0.0667, 1, 0],
+                    textAlpha: 1,
+                    textSize: 24,
+                    textAnchor: mod.UIAnchor.CenterLeft,
+                    padding: 10,
+                    bgColor: [0.2, 0.2, 0.2],
+                    bgAlpha: 1,
+                    bgFill: mod.UIBgFill.None,
+                    imageType: mod.UIImageType.None,
+                    imageColor: [1, 1, 1],
+                    imageAlpha: 1,
+                    buttonEnabled: false,
+                    playerID: playerID,
+                  },
+                  {
+                    type: "Text",
+                    name: "Text_Rotation",
+                    position: [0, 50],
+                    size: [400, 50],
+                    anchor: mod.UIAnchor.TopLeft,
+                    visible: true,
+                    textLabel: "Rotation: pitch, yaw, roll",
+                    textColor: [0.0667, 1, 0],
+                    textAlpha: 1,
+                    textSize: 24,
+                    textAnchor: mod.UIAnchor.CenterLeft,
+                    padding: 10,
+                    bgColor: [0.2, 0.2, 0.2],
+                    bgAlpha: 1,
+                    bgFill: mod.UIBgFill.None,
+                    imageType: mod.UIImageType.None,
+                    imageColor: [1, 1, 1],
+                    imageAlpha: 1,
+                    buttonEnabled: false,
+                    playerID: playerID,
+                  },
+                  {
+                    type: "Text",
+                    name: "Text_Velocity",
+                    position: [0, 100],
+                    size: [400, 50],
+                    anchor: mod.UIAnchor.TopLeft,
+                    visible: true,
+                    textLabel: "Velocity: 0m/s",
+                    textColor: [0.0667, 1, 0],
+                    textAlpha: 1,
+                    textSize: 24,
+                    textAnchor: mod.UIAnchor.CenterLeft,
+                    padding: 10,
+                    bgColor: [0.2, 0.2, 0.2],
+                    bgAlpha: 1,
+                    bgFill: mod.UIBgFill.None,
+                    imageType: mod.UIImageType.None,
+                    imageColor: [1, 1, 1],
+                    imageAlpha: 1,
+                    buttonEnabled: false,
+                    playerID: playerID,
+                  },
+                  {
+                    type: "Text",
+                    name: "Text_ShoulderSwap",
+                    position: [0, 150],
+                    size: [200, 50],
+                    anchor: mod.UIAnchor.TopLeft,
+                    visible: true,
+                    textLabel: "SHOULDER SWAP:",
+                    textColor: [1, 1, 1],
+                    textAlpha: 1,
+                    textSize: 16,
+                    textAnchor: mod.UIAnchor.Center,
+                    padding: 0,
+                    bgColor: [0.2, 0.2, 0.2],
+                    bgAlpha: 1,
+                    bgFill: mod.UIBgFill.None,
+                    imageType: mod.UIImageType.None,
+                    imageColor: [1, 1, 1],
+                    imageAlpha: 1,
+                    buttonEnabled: false
+                  },
+                  {
+                    type: "Text",
+                    name: "Text_ShowHideUI",
+                    position: [0, 200],
+                    size: [200, 50],
+                    anchor: mod.UIAnchor.TopLeft,
+                    visible: true,
+                    textLabel: "SHOW / HIDE UI:",
+                    textColor: [1, 1, 1],
+                    textAlpha: 1,
+                    textSize: 16,
+                    textAnchor: mod.UIAnchor.Center,
+                    padding: 0,
+                    bgColor: [0.2, 0.2, 0.2],
+                    bgAlpha: 1,
+                    bgFill: mod.UIBgFill.None,
+                    imageType: mod.UIImageType.None,
+                    imageColor: [1, 1, 1],
+                    imageAlpha: 1,
+                    buttonEnabled: false
+                  },
+                  {
+                    type: "Container",
+                    name: "Container_ShoulderSwapInstruction",
+                    position: [200, 150],
+                    size: [200, 50],
+                    anchor: mod.UIAnchor.TopLeft,
+                    visible: true,
+                    textLabel: "",
+                    textColor: [1, 1, 1],
+                    textAlpha: 1,
+                    textSize: 24,
+                    textAnchor: mod.UIAnchor.Center,
+                    padding: 0,
+                    bgColor: [0.2, 0.2, 0.2],
+                    bgAlpha: 0.3,
+                    bgFill: mod.UIBgFill.GradientBottom,
+                    imageType: mod.UIImageType.None,
+                    imageColor: [1, 1, 1],
+                    imageAlpha: 1,
+                    buttonEnabled: false,
+                    children: [
+                      {
+                        type: "Text",
+                        name: "Text_ShoulderSwapInstruction",
+                        position: [0, 0],
+                        size: [200, 50],
+                        anchor: mod.UIAnchor.TopLeft,
+                        visible: true,
+                        textLabel: "ADS FAST 2x Fast",
+                        textColor: [0.4392, 0.9216, 1],
+                        textAlpha: 1,
+                        textSize: 16,
+                        textAnchor: mod.UIAnchor.Center,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        imageType: mod.UIImageType.None,
+                        imageColor: [1, 1, 1],
+                        imageAlpha: 1,
+                        buttonEnabled: false
+                      }
+                    ]
+                  },
+                  {
+                    type: "Container",
+                    name: "Container_ADSMelee",
+                    position: [200, 200],
+                    size: [200, 50],
+                    anchor: mod.UIAnchor.TopLeft,
+                    visible: true,
+                    textLabel: "",
+                    textColor: [1, 1, 1],
+                    textAlpha: 1,
+                    textSize: 24,
+                    textAnchor: mod.UIAnchor.Center,
+                    padding: 0,
+                    bgColor: [0.2, 0.2, 0.2],
+                    bgAlpha: 0.3,
+                    bgFill: mod.UIBgFill.GradientBottom,
+                    imageType: mod.UIImageType.None,
+                    imageColor: [1, 1, 1],
+                    imageAlpha: 1,
+                    buttonEnabled: false,
+                    children: [
+                      {
+                        type: "Text",
+                        name: "Text_ADSMelee",
+                        position: [0, 0],
+                        size: [200, 50],
+                        anchor: mod.UIAnchor.Center,
+                        visible: true,
+                        textLabel: "ADS + MELEE",
+                        textColor: [0.4392, 0.9216, 1],
+                        textAlpha: 1,
+                        textSize: 16,
+                        textAnchor: mod.UIAnchor.Center,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        imageType: mod.UIImageType.None,
+                        imageColor: [1, 1, 1],
+                        imageAlpha: 1,
+                        buttonEnabled: false
+                      }
+                    ]
+                  }
+                ]
+              }
+            );
+
+            // Find the UI widgets using the unique names
+            this.locationText = mod.FindUIWidgetWithName("Text_Origin");
+            this.rotationText = mod.FindUIWidgetWithName("Text_Rotation");
+            this.velocityText = mod.FindUIWidgetWithName("Text_Velocity");
+        }
+
+        update(): void
+        {
+          if (!this.locationText || !this.rotationText || !this.velocityText || !this.OriginWidget)
+          {
+            console.log("PlayerOriginWidget: UI widgets not found");
+            return;
+          }
+
+          if (!mod.GetSoldierState(this.player, mod.SoldierStateBool.IsAlive))
+          {
+            //  mod.SetUIWidgetVisible(this.OriginWidget, false);
+            return;
+          }   
+
+          let origin = mod.GetSoldierState(this.player, mod.SoldierStateVector.GetPosition);
+          let velocity = mod.GetSoldierState(this.player, mod.SoldierStateNumber.Speed);
+          let rotation = mod.GetObjectRotation(this.player);
+          let ox = mod.XComponentOf(origin);
+          let oy = mod.YComponentOf(origin);
+          let oz = mod.ZComponentOf(origin);
+          let rx = mod.XComponentOf(rotation);
+          let ry = mod.YComponentOf(rotation);
+          let rz = mod.ZComponentOf(rotation);
+
+          mod.SetUITextLabel(this.locationText, mod.Message("Location: {}, {}, {}", Number(ox.toFixed(2)), Number(oy.toFixed(2)), Number(oz.toFixed(2))));
+          mod.SetUITextLabel(this.rotationText, mod.Message("Rotation: {}, {}, {}", Number(rx.toFixed(2)), Number(ry.toFixed(2)), Number(rz.toFixed(2))));
+          mod.SetUITextLabel(this.velocityText, mod.Message("Velocity: {}", Number(velocity.toFixed(2))));
+
+          mod.SetUIWidgetVisible(this.OriginWidget, true);
+        }
+    }
+
+    export class SpectateCamWidget {
+        OriginWidget: mod.UIWidget | undefined;
+        seal: SOCOM.CZSeal;
+        playerNameText: mod.UIWidget | undefined;
+
+        constructor(seal: SOCOM.CZSeal) {
+            this.seal = seal;
+            const playerID = seal.playerID;
+
+            this.OriginWidget = modlib.ParseUI(
+            {
+                name: "Container_SpectatorControls",
+                type: "Container",
+                position: [0, 0],
+                size: [600, 150],
+                anchor: mod.UIAnchor.BottomCenter,
+                visible: true,
+                padding: 0,
+                bgColor: [0.0745, 0.1843, 0.2471],
+                bgAlpha: 0.8,
+                bgFill: mod.UIBgFill.GradientTop,
+                playerID: playerID,
+                children: [
+                  {
+                    name: "Container_SpectatorControlsOutline",
+                    type: "Container",
+                    position: [0, 0],
+                    size: [600, 150],
+                    anchor: mod.UIAnchor.Center,
+                    visible: true,
+                    padding: 0,
+                    bgColor: [1, 0.9882, 0.6118],
+                    bgAlpha: 0.5,
+                    bgFill: mod.UIBgFill.OutlineThin,
+                    playerID: playerID
+                  },
+                  {
+                    name: "Container_PrevPlayer",
+                    type: "Container",
+                    position: [5, 0],
+                    size: [100, 130],
+                    anchor: mod.UIAnchor.CenterLeft,
+                    visible: true,
+                    padding: 0,
+                    bgColor: [0.2, 0.2, 0.2],
+                    bgAlpha: 1,
+                    bgFill: mod.UIBgFill.None,
+                    playerID: playerID,
+                    children: [
+                      {
+                        name: "Button_PreviousPlayer",
+                        type: "Button",
+                        position: [0, 0],
+                        size: [100, 130],
+                        anchor: mod.UIAnchor.Center,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        buttonEnabled: true,
+                        buttonColorBase: [0.3, 0.3, 0.3],
+                        buttonAlphaBase: 1,
+                        buttonColorDisabled: [0.1, 0.1, 0.1],
+                        buttonAlphaDisabled: 0.5,
+                        buttonColorPressed: [0.2, 0.2, 0.2],
+                        buttonAlphaPressed: 1,
+                        buttonColorHover: [0.4, 0.4, 0.4],
+                        buttonAlphaHover: 1,
+                        buttonColorFocused: [0.5, 0.5, 0.5],
+                        buttonAlphaFocused: 1,
+                        playerID: playerID
+                      },
+                      {
+                        name: "Text_PreviousPlayer",
+                        type: "Text",
+                        position: [0, 0],
+                        size: [100, 130],
+                        anchor: mod.UIAnchor.Center,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        textLabel: "PREV",
+                        textColor: [1, 1, 1],
+                        textAlpha: 0.8,
+                        textSize: 24,
+                        textAnchor: mod.UIAnchor.Center,
+                        playerID: playerID
+                      }
+                      // {
+                      //   name: "Container_PreviousPlayer_Outline",
+                      //   type: "Container",
+                      //   position: [0, 0],
+                      //   size: [100, 130],
+                      //   anchor: mod.UIAnchor.TopLeft,
+                      //   visible: true,
+                      //   padding: 0,
+                      //   bgColor: [1, 1, 1],
+                      //   bgAlpha: 0.3,
+                      //   bgFill: mod.UIBgFill.OutlineThin,
+                      //   playerID: playerID
+                      // }
+                    ]
+                  },
+                  {
+                    name: "Container_NextPlayer",
+                    type: "Container",
+                    position: [-5, 0],
+                    size: [100, 130],
+                    anchor: mod.UIAnchor.CenterRight,
+                    visible: true,
+                    padding: 0,
+                    bgColor: [0.2, 0.2, 0.2],
+                    bgAlpha: 1,
+                    bgFill: mod.UIBgFill.None,
+                    playerID: playerID,
+                    children: [
+                      {
+                        name: "Button_NextPlayer",
+                        type: "Button",
+                        position: [0, 0],
+                        size: [100, 130],
+                        anchor: mod.UIAnchor.Center,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        buttonEnabled: true,
+                        buttonColorBase: [0.3, 0.3, 0.3],
+                        buttonAlphaBase: 1,
+                        buttonColorDisabled: [0.1, 0.1, 0.1],
+                        buttonAlphaDisabled: 0.5,
+                        buttonColorPressed: [0.2, 0.2, 0.2],
+                        buttonAlphaPressed: 1,
+                        buttonColorHover: [0.4, 0.4, 0.4],
+                        buttonAlphaHover: 1,
+                        buttonColorFocused: [0.5, 0.5, 0.5],
+                        buttonAlphaFocused: 1,
+                        playerID: playerID
+                      },
+                      {
+                        name: "Text_NextPlayer",
+                        type: "Text",
+                        position: [0, 0],
+                        size: [100, 130],
+                        anchor: mod.UIAnchor.Center,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        textLabel: "NEXT",
+                        textColor: [1, 1, 1],
+                        textAlpha: 0.8,
+                        textSize: 24,
+                        textAnchor: mod.UIAnchor.Center,
+                        playerID: playerID
+                      }
+                      //    {
+                      //      name: "Container_NextPlayer_Outline",
+                      //      type: "Container",
+                      //      position: [0, 0],
+                      //      size: [100, 130],
+                      //      anchor: mod.UIAnchor.TopLeft,
+                      //      visible: true,
+                      //      padding: 0,
+                      //      bgColor: [1, 1, 1],
+                      //      bgAlpha: 0.3,
+                      //      bgFill: mod.UIBgFill.OutlineThin,
+                      //      playerID: playerID
+                      //    }
+                    ]
+                  },
+                  {
+                    name: "Container_PlayerName",
+                    type: "Container",
+                    position: [0, -32.5],
+                    size: [300, 65],
+                    anchor: mod.UIAnchor.Center,
+                    visible: true,
+                    padding: 0,
+                    bgColor: [0.0745, 0.1843, 0.2471],
+                    bgAlpha: 0.1,
+                    bgFill: mod.UIBgFill.Blur,
+                    playerID: playerID,
+                    children: [
+                      {
+                        name: "Text_PlayerName",
+                        type: "Text",
+                        position: [0, 0],
+                        size: [300, 65],
+                        anchor: mod.UIAnchor.Center,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        textLabel: "Player Name: x",
+                        textColor: [1, 1, 1],
+                        textAlpha: 1,
+                        textSize: 24,
+                        textAnchor: mod.UIAnchor.Center,
+                        playerID: playerID
+                      }
+                    ]
+                  },
+                  {
+                    name: "Container_LoadoutEditor",
+                    type: "Container",
+                    position: [0, 32.5],
+                    size: [200, 50],
+                    anchor: mod.UIAnchor.Center,
+                    visible: true,
+                    padding: 0,
+                    bgColor: [0.0745, 0.1843, 0.2471],
+                    bgAlpha: 0.1,
+                    bgFill: mod.UIBgFill.Blur,
+                    playerID: playerID,
+                    children: [
+                      {
+                        name: "Button_LoadoutEditor",
+                        type: "Button",
+                        position: [0, 0],
+                        size: [200, 50],
+                        anchor: mod.UIAnchor.TopLeft,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        buttonEnabled: true,
+                        buttonColorBase: [0.3, 0.3, 0.3],
+                        buttonAlphaBase: 1,
+                        buttonColorDisabled: [0.1, 0.1, 0.1],
+                        buttonAlphaDisabled: 0.5,
+                        buttonColorPressed: [0.2, 0.2, 0.2],
+                        buttonAlphaPressed: 1,
+                        buttonColorHover: [0.4, 0.4, 0.4],
+                        buttonAlphaHover: 1,
+                        buttonColorFocused: [0.5, 0.5, 0.5],
+                        buttonAlphaFocused: 1,
+                        playerID: playerID
+                      },
+                      {
+                        name: "Text_LoadoutEditor",
+                        type: "Text",
+                        position: [0, 0],
+                        size: [200, 50],
+                        anchor: mod.UIAnchor.Center,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        textLabel: "EDIT LOADOUT",
+                        textColor: [1, 1, 1],
+                        textAlpha: 0.8,
+                        textSize: 24,
+                        textAnchor: mod.UIAnchor.Center,
+                        playerID: playerID
+                      },
+                      {
+                        name: "Container_LoadoutEditor_Outline",
+                        type: "Container",
+                        position: [0, 0],
+                        size: [200, 50],
+                        anchor: mod.UIAnchor.TopLeft,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [1, 1, 1],
+                        bgAlpha: 0.3,
+                        bgFill: mod.UIBgFill.OutlineThin,
+                        playerID: playerID
+                      }
+                    ]
+                  }
+                ]
+              }
+            );
+
+            this.playerNameText = mod.FindUIWidgetWithName("Text_PlayerName");
+            mod.SetUIWidgetVisible(this.OriginWidget as mod.UIWidget, false);
+        }
+
+        update(): void
+        {
+            if (!this.playerNameText)
+                return;
+
+            if (!this.seal.camera.attachedPlayer) {
+                mod.SetUITextLabel(this.playerNameText, mod.Message("NO PLAYER FOUND"));
+                return;
+            }
+            mod.SetUITextLabel(this.playerNameText, mod.Message("{}", this.seal.camera.attachedPlayer));
+        }
+
+        async onUIButtonEvent(widget: mod.UIWidget, event: any): Promise<void>
+        {
+            
+            if (!this.seal.isSpectator)
+                return;
+
+            let widgetName = mod.GetUIWidgetName(widget);
+            if (!widgetName)
+                return;
+
+            if (widgetName === "Button_PreviousPlayer") {
+                await this.seal.camera.prevSpectateTarget();
+                return;
+            }
+
+            if (widgetName === "Button_NextPlayer") {
+                await this.seal.camera.nextSpectateTarget();
+                return;
+            }
+
+            if (widgetName === "Button_LoadoutEditor") {
+                await this.seal.SetSpectatorMode(false); // disable spectator mode to prevent the chance of bugs
+                mod.UndeployPlayer(this.seal.player);
+                return;
+            }
+        }
+
+        toggleVisible(isVisible: boolean): void {
+            if (!this.OriginWidget) 
+                return;
+
+            mod.SetUIWidgetVisible(this.OriginWidget, isVisible);
+        }
+    }
+
+
 }
 
 export namespace Utility {
