@@ -1,5 +1,5 @@
-// import * as modlib from 'modlib'; // required on server side
 import * as modlib from '../PortalSDK/code/modlib'; // for local testing
+// import * as modlib from 'modlib'; // required on server side
 
 // Triggered when player joins the game. Useful for pregame setup, team management, etc.
 export function OnPlayerJoinGame(eventPlayer: mod.Player): void 
@@ -29,6 +29,11 @@ export function OnSpawnerSpawned(eventPlayer: mod.Player, eventSpawner: mod.Spaw
 export function OnPlayerUndeploy(eventPlayer: mod.Player): void 
 { 
     SOCOM.CZGame.OnPlayerUndeploy(eventPlayer);
+}
+
+export function OnPlayerInteract(eventPlayer: mod.Player, eventInteractPoint: mod.InteractPoint): void
+{
+    SOCOM.CZGame.OnPlayerInteract(eventPlayer, eventInteractPoint);
 }
 
 // Triggered on main gamemode start. Useful for game start setup logic.
@@ -133,12 +138,21 @@ export namespace SOCOM {
                 let seal = CZSeal.get(player);
                 if (!seal)
                     continue;
-            
-                /* update camera state */
-                seal.CameraUpdate();
+
+                let IsInteracting = mod.GetSoldierState(seal.player, mod.SoldierStateBool.IsInteracting);
+                if (IsInteracting)
+                  console.log(`Player ${seal.playerID} is pressing the interact key.`);
                 
-                /* update player widgets */
-                seal.UpdateWidgets();
+                /* update camera state */
+                seal.update();
+
+                // This is the main method available for getting soldier orientation
+                //  const facingDirection = mod.GetSoldierState(seal.player, mod.SoldierStateVector.GetFacingDirection);
+                //  let ox = mod.XComponentOf(facingDirection);
+                //  let oz = mod.ZComponentOf(facingDirection);
+                //  const yawRadians = Math.atan2(ox, oz);
+                //  const yawDegrees = yawRadians * (180 / Math.PI);
+                //  console.log(`Yaw Radians: ${Number(yawRadians).toFixed(2)} | Yaw Degrees: ${Number(yawDegrees).toFixed(2)}`);
             }
         }
 
@@ -220,6 +234,15 @@ export namespace SOCOM {
             console.log(`Player Undeployed: ID ${seal.playerID} | TeamID: ${seal.teamID} | isAI: ${seal.isAI}`);
         }
 
+        static OnPlayerInteract(eventPlayer: mod.Player, eventInteractPoint: mod.InteractPoint): void
+        {
+            let seal = CZSeal.get(eventPlayer);
+            if (!seal)
+                return;
+
+            console.log(`Player Interacted: ID ${seal.playerID} | TeamID: ${seal.teamID} | isAI: ${seal.isAI} | InteractPoint: ${eventInteractPoint}`);
+        }
+
         static SpawnAI(teamID: number): void
         {
             if (teamID < 1 || teamID > 2)
@@ -244,6 +267,35 @@ export namespace SOCOM {
         }
     }
 
+    // @TODO: could be invalid
+    export class CZSoldierTM
+    {
+        location!: mod.Vector;
+        rotation!: mod.Vector;
+        lookAt!: mod.Vector;
+        velocity!: number;
+        private player: mod.Player;
+
+        constructor(player: mod.Player)
+        {
+            this.player = player;
+            this.update();
+        }
+
+        update(): void
+        {
+            if (!mod.IsPlayerValid(this.player) || !mod.GetSoldierState(this.player, mod.SoldierStateBool.IsAlive))
+            {
+                return;
+            }
+
+            this.location = mod.GetSoldierState(this.player, mod.SoldierStateVector.GetPosition);
+            this.lookAt = mod.GetSoldierState(this.player, mod.SoldierStateVector.GetFacingDirection);
+            this.velocity = mod.GetSoldierState(this.player, mod.SoldierStateNumber.Speed);
+            this.rotation = mod.GetObjectRotation(this.player);
+        }
+    }
+
     export class CZSeal {
         player: mod.Player;
         playerID: number;
@@ -251,6 +303,8 @@ export namespace SOCOM {
         isAI: boolean;
         isZooming: boolean = false;
         cameraView: SoldierCameraView = SoldierCameraView.RightShoulder; // current camera view mode
+        shouldSwapShoulder: boolean = false;
+        soldierTM: CZSoldierTM;
 
         // zoom pattern detection for shoulder switching
         private inputDetector = new Utility.Input();
@@ -268,6 +322,7 @@ export namespace SOCOM {
             this.playerID = mod.GetObjId(player);
             this.teamID = mod.GetObjId(mod.GetTeam(player)); // teamID should be 1 or 2
             this.isAI = mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier);
+            this.soldierTM = new CZSoldierTM(player);
 
             // Only create PlayerOriginWidget for non-AI players
             if (!this.isAI) {
@@ -332,8 +387,35 @@ export namespace SOCOM {
             return this.#allSealPlayers[playerID];
         }
 
+        update(): void
+        {
+            //  if (!this.isSealValid())
+            //      return;
+
+            /* update soldier transforms */
+            this.soldierTM.update();
+
+            /* update camera state */
+            if (!this.isAI)
+            {
+                this.CameraUpdate();
+                //  this.camera.update();
+            }
+                
+            /* update player widgets */
+            this.UpdateWidgets();
+
+            /* teleport forward / clip into walls for obtaining coordinates / spectator spawn box */
+            if (this.inputDetector.dtcInput(this.player, mod.GetSoldierState(this.player, mod.SoldierStateBool.IsZooming)))
+            {
+              let newOrigin = mod.Add(this.soldierTM.location, mod.Multiply(this.soldierTM.lookAt, 5));
+              let orientation = mod.GetObjectRotation(this.player);
+              mod.SetObjectTransform(this.player, mod.CreateTransform(newOrigin, orientation));
+            }
+        }
+
         /* call in game update to update camera state */
-        CameraUpdate(): void
+        private CameraUpdate(): void
         {
             if (this.isAI || !mod.GetSoldierState(this.player, mod.SoldierStateBool.IsAlive))
                 return;
@@ -343,10 +425,13 @@ export namespace SOCOM {
             if (isCurrentlyZooming == this.isZooming)
                 return;
     
-            /* detect zoom pattern for shoulder switching */
-            if (this.inputDetector.dtcInput(this.player, isCurrentlyZooming))
+            //  /* detect zoom pattern for shoulder switching */
+            //  if (this.inputDetector.dtcInput(this.player, isCurrentlyZooming))
+            //      this.switchShoulderView();
+
+            if (this.shouldSwapShoulder)
                 this.switchShoulderView();
-    
+
             /* set zoom state */
             this.isZooming = isCurrentlyZooming;
             let currentShoulder = this.cameraView === SoldierCameraView.RightShoulder ? 0 : 1;
@@ -358,12 +443,8 @@ export namespace SOCOM {
         /* update player widgets - call this regularly for non-AI players */
         UpdateWidgets(): void
         {
-            if (this.playerOriginWidget) {
-                this.playerOriginWidget.update(this.player);
-              console.log(`CZSeal: Updated playerOriginWidget for Player ID: ${this.playerID}`);
-              }
-            else
-              console.log(`CZSeal: No playerOriginWidget for Player ID: ${this.playerID}`);
+            if (this.playerOriginWidget)
+                this.playerOriginWidget.update();
         }
 
         /* show or hide the player origin widget */
@@ -681,7 +762,6 @@ export namespace UI {
 
         constructor(player: mod.Player) {
             this.player = player;
-            const playerID = mod.GetObjId(player);
             
             // Create unique widget names for this player instance
             //  const containerName = `Container_PlayerInfo_${playerID}`;
@@ -710,7 +790,7 @@ export namespace UI {
                 imageColor: [1, 1, 1],
                 imageAlpha: 1,
                 buttonEnabled: false,
-                playerID: playerID,
+                playerId: player,
                 children: [
                   {
                     type: "Text",
@@ -732,7 +812,7 @@ export namespace UI {
                     imageColor: [1, 1, 1],
                     imageAlpha: 1,
                     buttonEnabled: false,
-                    playerID: playerID,
+                    playerId: player,
                   },
                   {
                     type: "Text",
@@ -754,7 +834,7 @@ export namespace UI {
                     imageColor: [1, 1, 1],
                     imageAlpha: 1,
                     buttonEnabled: false,
-                    playerID: playerID,
+                    playerId: player,
                   },
                   {
                     type: "Text",
@@ -776,7 +856,7 @@ export namespace UI {
                     imageColor: [1, 1, 1],
                     imageAlpha: 1,
                     buttonEnabled: false,
-                    playerID: playerID,
+                    playerId: player,
                   },
                   {
                     type: "Text",
@@ -797,7 +877,8 @@ export namespace UI {
                     imageType: mod.UIImageType.None,
                     imageColor: [1, 1, 1],
                     imageAlpha: 1,
-                    buttonEnabled: false
+                    buttonEnabled: false,
+                    playerId: player,
                   },
                   {
                     type: "Text",
@@ -818,7 +899,8 @@ export namespace UI {
                     imageType: mod.UIImageType.None,
                     imageColor: [1, 1, 1],
                     imageAlpha: 1,
-                    buttonEnabled: false
+                    buttonEnabled: false,
+                    playerId: player,
                   },
                   {
                     type: "Container",
@@ -840,6 +922,7 @@ export namespace UI {
                     imageColor: [1, 1, 1],
                     imageAlpha: 1,
                     buttonEnabled: false,
+                    playerId: player,
                     children: [
                       {
                         type: "Text",
@@ -860,7 +943,8 @@ export namespace UI {
                         imageType: mod.UIImageType.None,
                         imageColor: [1, 1, 1],
                         imageAlpha: 1,
-                        buttonEnabled: false
+                        buttonEnabled: false,
+                        playerId: player,
                       }
                     ]
                   },
@@ -884,6 +968,7 @@ export namespace UI {
                     imageColor: [1, 1, 1],
                     imageAlpha: 1,
                     buttonEnabled: false,
+                    playerId: player,
                     children: [
                       {
                         type: "Text",
@@ -904,7 +989,8 @@ export namespace UI {
                         imageType: mod.UIImageType.None,
                         imageColor: [1, 1, 1],
                         imageAlpha: 1,
-                        buttonEnabled: false
+                        buttonEnabled: false,
+                        playerId: player,
                       }
                     ]
                   }
