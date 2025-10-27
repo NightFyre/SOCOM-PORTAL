@@ -27,6 +27,12 @@
 */
 import * as modlib from '../PortalSDK/code/modlib'; // for local testing
 // import * as modlib from 'modlib'; // required on server side
+
+// FLAGS FOR DEBUGGING
+const DEBUG_LOG = true;
+const HOSTED = false;
+
+// FLAGS FOR GAMEMODE SETUP
 const HQ = 1;
 const DEPLOY_CAMERA = 3;
 const PLAYER_SPAWNERS = 50; // 50 - 99 (Team Spawn Points)
@@ -36,10 +42,7 @@ const MIN_PLAYERS_TO_START = 1; // minimum players required to start the match
 const MAX_PLAYERS_FOR_BOTS = 8; // maximum players before bots are removed
 const MAX_PLAYERS = 32;
 const MAX_PLAYERS_PER_TEAM = MAX_PLAYERS / 2;
-const END_ROUND_ON_LAST_ELIMINATED_PLAYER = false; // whether to end the round when the last player on a team is eliminated when bots are backfilling empty player slots
-
-
-let bInputMode = false; // used for tracking the state of UI input mode
+const END_ROUND_ON_LAST_ELIMINATED_PLAYER = true; // whether to end the round when the last player on a team is eliminated when bots are backfilling empty player slots
 
 ////////////////////////////////// PLAYER EVENTS ///////////////////////////////////////
 
@@ -95,6 +98,12 @@ export function OnPlayerEarnedAssist( eventPlayer: mod.Player, eventOtherPlayer:
 export function OnPlayerDamaged( eventPlayer: mod.Player, eventOtherPlayer: mod.Player, eventDamageType: mod.DamageType, eventWeaponUnlock: mod.WeaponUnlock ): void 
 {
     return SOCOM.CZMatchData.OnPlayerDamaged(eventPlayer, eventOtherPlayer, eventDamageType, eventWeaponUnlock);
+}
+
+// Triggered when a player interacts with an interact point.
+export function OnPlayerInteract(eventPlayer: mod.Player, eventInteractPoint: mod.InteractPoint): void
+{
+    //  return SOCOM.CZMatchData.OnPlayerInteract(eventPlayer, eventInteractPoint);
 }
 
 
@@ -179,12 +188,15 @@ export function OngoingGlobal(): void
 
     // Update score widget UI
     UI.RoundInfoWidget.update();
+}
 
+export function OngoingPlayer(eventPlayer: mod.Player): void
+{    
     // update all player instances
     for (let player of SOCOM.CZSeal.sealObjects)
     {
         let seal = SOCOM.CZSeal.get(player, undefined);
-        if (!seal)
+        if (!seal || seal.playerID !== mod.GetObjId(eventPlayer))
             continue;
 
         /* update seal state */
@@ -196,7 +208,7 @@ export function OngoingGlobal(): void
 export function OnPlayerUIButtonEvent(player: mod.Player, widget: any, event: any)
 {
     let seal = SOCOM.CZSeal.get(player, undefined);
-    if (!seal)
+    if (!seal || seal.isAI)
         return;
 
     seal.spectateCamera?.onUIButtonEvent(widget, event);
@@ -246,14 +258,28 @@ export namespace SOCOM
         /* updates the camera view based on zoom state and shoulder view */
         private updateCameraView(player: mod.Player): void
         {
+            let bShouldUpdateCameraView = false;
+
+            /* get interact state */
+            let isInteracting = mod.GetSoldierState(player, mod.SoldierStateBool.IsInteracting);
+            if (this.sealPlayer.inputDetector.dtcInput(player, isInteracting))
+            {
+                this.switchShoulderView();
+                bShouldUpdateCameraView = true;
+            }
+
             /* get zoom state */
             let isCurrentlyZooming = mod.GetSoldierState(player, mod.SoldierStateBool.IsZooming);
-            if (isCurrentlyZooming == this.isZooming)
+            if (isCurrentlyZooming !== this.isZooming)
+                bShouldUpdateCameraView = true;
+                
+
+            if (!bShouldUpdateCameraView)
                 return;
 
-            /* detect zoom pattern for shoulder switching */
-            if (this.sealPlayer.inputDetector.dtcInput(player, isCurrentlyZooming))
-                this.switchShoulderView();
+            //  /* detect zoom pattern for shoulder switching */
+            //  if (this.sealPlayer.inputDetector.dtcInput(player, isCurrentlyZooming))
+            //      this.switchShoulderView();
 
             /* set zoom state */
             this.isZooming = isCurrentlyZooming;
@@ -266,6 +292,12 @@ export namespace SOCOM
         /* sets up the spectator mode for the player */
         async enterSpectatorMode(): Promise<void>
         {
+            // Safety check: Don't allow AI to enter spectator mode
+            if (this.sealPlayer.isAI) {
+                console.log(`[CZCamera::enterSpectatorMode] Blocked AI player ${this.sealPlayer.playerID} from entering spectator mode`);
+                return;
+            }
+
             /* find closest alive player to spectate */
             let closestPlayer = mod.ClosestPlayerTo(this.sealPlayer.soldierTM.location, mod.GetTeam(this.sealPlayer.teamID)); // find closest team player
             if (!closestPlayer)
@@ -276,16 +308,6 @@ export namespace SOCOM
 
             /* RESTRICT PLAYER INPUTS */
             mod.EnableAllInputRestrictions(this.sealPlayer.player, true);
-            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Jump, true), undefined);
-            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Prone, true), undefined);
-            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Crouch, true), undefined);
-            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Interact, true), undefined);
-            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.CameraYaw, true), undefined);
-            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.FireWeapon, true), undefined);
-            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.FireWeapon, true), undefined);
-            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.CameraPitch, true), undefined);
-            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.MoveLeftRight, true), undefined);
-            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.MoveForwardBack, true), undefined);
             await mod.Wait(0.1); // small delay to ensure inputs are disabled
 
             /* remove equipment */
@@ -296,7 +318,7 @@ export namespace SOCOM
 
             await this.AttachToPlayer(closestPlayer); // attach to closest player
 
-            mod.EnableUIInputMode(true);  // enable UI input mode
+            mod.EnableUIInputMode(true, this.sealPlayer.player);  // enable UI input mode
             this.sealPlayer.spectateCamera?.toggleVisible(true);
             console.log(`[CZCamera::enterSpectatorMode] Player ${this.sealPlayer.playerID} has entered spectator mode, spectating player ${mod.GetObjId(closestPlayer)}`);
         }
@@ -304,18 +326,13 @@ export namespace SOCOM
         /* exits spectator mode and returns control to the player */
         async exitSpectatorMode(): Promise<void>
         {
+            // Safety check: Don't allow AI operations
+            if (this.sealPlayer.isAI) {
+                console.log(`[CZCamera::exitSpectatorMode] Blocked AI player ${this.sealPlayer.playerID} from spectator operations`);
+                return;
+            }
             /* UNRESTRICT PLAYER INPUTS */
             mod.EnableAllInputRestrictions(this.sealPlayer.player, false);
-            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Jump, false), undefined);
-            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Prone, false), undefined);
-            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Crouch, false), undefined);
-            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Interact, false), undefined);
-            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.CameraYaw, false), undefined);
-            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.FireWeapon, false), undefined);
-            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.FireWeapon, false), undefined);
-            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.CameraPitch, false), undefined);
-            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.MoveLeftRight, false), undefined);
-            //  Utility.safeCall(() => mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.MoveForwardBack, false), undefined);
             await mod.Wait(0.1); // small delay to ensure inputs are re-enabled
 
             this.isSpectatingPlayer = false;
@@ -323,7 +340,7 @@ export namespace SOCOM
             await this.AttachToPlayer(this.sealPlayer.player); // reattach to self
 
             this.sealPlayer.spectateCamera?.toggleVisible(false);
-            mod.EnableUIInputMode(false);  // disable UI input mode
+            mod.EnableUIInputMode(false, this.sealPlayer.player);  // disable UI input mode
             await mod.Wait(0.5); // small delay to ensure camera controls are hidden
 
             console.log(`[CZCamera::exitSpectatorMode] Player ${this.sealPlayer.playerID} has exited spectator mode`);
@@ -382,30 +399,34 @@ export namespace SOCOM
         /* attaches the camera to the specified player */
         private async AttachToPlayer(player: mod.Player): Promise<void>
         {
-          /*
-            ========== Start ==========
-            Exception: NoMatchingOverload
-            Function: SetCameraTargetForPlayer
-            Error info: 
-            	Provided parameters () do not match any overload. Function supports the following overloads: (Player, Player).
-            ========== End ==========
-          */
+            // Safety check: Don't allow AI camera operations
+            if (this.sealPlayer.isAI) {
+                console.log(`[CZCamera::AttachToPlayer] Blocked AI player ${this.sealPlayer.playerID} from camera attachment`);
+                return;
+            }
 
             /* SET ATTACHED PLAYER */
             this.attachedPlayer = player;
 
             /* SET CAMERA TARGET TO PLAYER */
-
-            //@ ts-ignore
-            mod.SetCameraTargetForPlayer(this.sealPlayer.player, player);
+            try {
+                // @ts-ignore - SetCameraTargetForPlayer exists but is undocumented
+                mod.SetCameraTargetForPlayer(this.sealPlayer.player, player);
+            } catch (error) {
+                console.log(`[CZCamera::AttachToPlayer] Error setting camera target for player ${this.sealPlayer.playerID}: ${error}`);
+            }
 
             /* RESET CAMERA TYPES */
-            mod.SetCameraTypeForPlayer(this.sealPlayer.player, mod.Cameras.ThirdPerson, SoldierCameraView.LeftShoulder);
-            await mod.Wait(0.1);
-            mod.SetCameraTypeForPlayer(this.sealPlayer.player, mod.Cameras.FirstPerson);
-            await mod.Wait(0.1);
-            mod.SetCameraTypeForPlayer(this.sealPlayer.player, mod.Cameras.ThirdPerson, SoldierCameraView.RightShoulder);
-            await mod.Wait(0.1);
+            try {
+                mod.SetCameraTypeForPlayer(this.sealPlayer.player, mod.Cameras.ThirdPerson, SoldierCameraView.LeftShoulder);
+                await mod.Wait(0.1);
+                mod.SetCameraTypeForPlayer(this.sealPlayer.player, mod.Cameras.FirstPerson);
+                await mod.Wait(0.1);
+                mod.SetCameraTypeForPlayer(this.sealPlayer.player, mod.Cameras.ThirdPerson, SoldierCameraView.RightShoulder);
+                await mod.Wait(0.1);
+            } catch (error) {
+                console.log(`[CZCamera::AttachToPlayer] Error setting camera for player ${this.sealPlayer.playerID}: ${error}`);
+            }
 
             /* UPDATE FLAG */
             this.isSpectatingPlayer = this.attachedPlayer !== this.sealPlayer.player;
@@ -564,7 +585,7 @@ export namespace SOCOM
         camera: CZCamera;
                 
         // Per-player Spectate Camera UI (only for players who are dead)
-        spectateCamera?: UI.SpectateCamWidget;
+        spectateCamera?: UI.SpectateCamWidget | undefined;
 
         welcomeUI;
 
@@ -673,30 +694,36 @@ export namespace SOCOM
 
             /* update camera state */
             if (!this.isAI)
+            {
                 this.camera.update();
 
-            if (this.isSpectator)
-            {
+                if (this.isSpectator)
+                {
 
-                // update spectate widget name tag
-                this.spectateCamera?.update();
+                    // update spectate widget name tag
+                    this.spectateCamera?.update();
 
+                    // @TODO: move spectator out of view as they need to be alive to spectate properly
+                    /// why is this sending players to 0 , 0 , 0 ??? the value is correct though ? ? ? fucking portal sdk 
+                    //  let spawnOrigin = CZMatchData.spawnOrigins[this.teamID - 1];
+                    //  let oX = mod.XComponentOf(spawnOrigin);
+                    //  let oY = mod.YComponentOf(spawnOrigin);
+                    //  let oZ = mod.ZComponentOf(spawnOrigin);
+                    //  
+                    //  //  sending to 0 0 0 instead of correct spawn origin , verify coords are still correct?
+                    //  if (hasPrintedSpectatorPosition === false)
+                    //      console.log(`[CZSeal::update] Player ${this.playerID} is a spectator , moving out of view to (${oX.toFixed(2)}, ${oY.toFixed(2)}, ${oZ.toFixed(2)})`);
+                    //  this.setWorldPosition(mod.CreateVector(oX, oY, oZ)); // move spectator out of view
 
-                //  let spawnOrigin = CZMatchData.spawnOrigins[this.teamID - 1];
-                //  let oX = mod.XComponentOf(spawnOrigin);
-                //  let oY = mod.YComponentOf(spawnOrigin);
-                //  let oZ = mod.ZComponentOf(spawnOrigin);
-                //  this.setWorldPosition(mod.CreateVector(oX, oY, oZ)); // move spectator out of view
-
-                return;
-            }
-
+                    return;
+                }
+            }   
             /* update name tag icon */
             this.updateIcon();
 
             /* update ai pathing & behavior */
-            if (this.isAI)
-              this.updateAIPath();
+            //  if (this.isAI)
+            //    this.updateAIPath();
 
         }
 
@@ -930,8 +957,10 @@ export namespace SOCOM
         /* enables or disables spectator mode */
         async SetSpectatorMode(spectate: boolean): Promise<void>
         {
-            if (this.isAI)
+            if (this.isAI) {
+                console.log(`[CZSeal::SetSpectatorMode] Blocked AI player ${this.playerID} from spectator mode operations`);
                 return;
+            }
 
             this.isSpectator = spectate;
             spectate ? await this.camera.enterSpectatorMode() : await this.camera.exitSpectatorMode();
@@ -1555,7 +1584,7 @@ export namespace SOCOM
             }
 
             /* seal already spawned for this round */
-            if (seal.hasSpawned)
+            if (seal.hasSpawned && !seal.isAI)
             {
                 console.log(`[CZMatchData::OnPlayerSpawned] Player ${seal.playerID} attempted to spawn again for team ${seal.teamID} | isAI: ${seal.isAI} | isAlive: ${seal.isAlive}`);
                 seal.SetSpectatorMode(true);
@@ -1578,6 +1607,7 @@ export namespace SOCOM
                 mod.Wait(1); // wait 1 frame
                 mod.SetCameraTypeForPlayer(seal.player, mod.Cameras.ThirdPerson, seal.camera.viewType === SoldierCameraView.RightShoulder ? 0 : 1);
             }
+            mod.EnableAllInputRestrictions(seal.player, false); // disable input restrictions just incase anything is lingering from last round
 
             console.log(`[CZMatchData::OnPlayerSpawned] Player ${seal.playerID} spawned for team ${seal.teamID} | isAI: ${seal.isAI} | hasSpawned: ${seal.hasSpawned} | isAlive: ${seal.isAlive}`);
         }
@@ -1704,6 +1734,14 @@ export namespace SOCOM
                 return;
 
             shooter.OnEarnedAssist(eventOtherPlayer, eventDeathType);
+        }
+
+        static OnPlayerInteracted(eventPlayer: mod.Player, interactPoint: mod.InteractPoint): void
+        {
+            let seal = CZSeal.get(eventPlayer, undefined);
+            if (!seal)
+                return;
+            
         }
 
         /* utility method to get alive players for a team */
@@ -2414,7 +2452,6 @@ export namespace UI {
 
         constructor(player: mod.Player) {
             this.player = player;
-            const playerID = mod.GetObjId(player);
             
             // Create unique widget names for this player instance
             //  const containerName = `Container_PlayerInfo_${playerID}`;
@@ -2443,7 +2480,7 @@ export namespace UI {
                 imageColor: [1, 1, 1],
                 imageAlpha: 1,
                 buttonEnabled: false,
-                playerID: playerID,
+                playerId: player,
                 children: [
                   {
                     type: "Text",
@@ -2465,7 +2502,7 @@ export namespace UI {
                     imageColor: [1, 1, 1],
                     imageAlpha: 1,
                     buttonEnabled: false,
-                    playerID: playerID,
+                    playerId: player,
                   },
                   {
                     type: "Text",
@@ -2487,7 +2524,7 @@ export namespace UI {
                     imageColor: [1, 1, 1],
                     imageAlpha: 1,
                     buttonEnabled: false,
-                    playerID: playerID,
+                    playerId: player,
                   },
                   {
                     type: "Text",
@@ -2509,7 +2546,7 @@ export namespace UI {
                     imageColor: [1, 1, 1],
                     imageAlpha: 1,
                     buttonEnabled: false,
-                    playerID: playerID,
+                    playerId: player,
                   },
                   {
                     type: "Text",
@@ -2690,7 +2727,6 @@ export namespace UI {
 
         constructor(seal: SOCOM.CZSeal) {
             this.seal = seal;
-            const playerID = seal.playerID;
 
             this.OriginWidget = modlib.ParseUI(
             {
@@ -2704,7 +2740,7 @@ export namespace UI {
                 bgColor: [0.0745, 0.1843, 0.2471],
                 bgAlpha: 0.8,
                 bgFill: mod.UIBgFill.GradientTop,
-                playerID: playerID,
+                playerId: seal.player,
                 children: [
                   {
                     name: "Container_SpectatorControlsOutline",
@@ -2717,7 +2753,7 @@ export namespace UI {
                     bgColor: [1, 0.9882, 0.6118],
                     bgAlpha: 0.5,
                     bgFill: mod.UIBgFill.OutlineThin,
-                    playerID: playerID
+                    playerId: seal.player
                   },
                   {
                     name: "Container_PrevPlayer",
@@ -2730,7 +2766,7 @@ export namespace UI {
                     bgColor: [0.2, 0.2, 0.2],
                     bgAlpha: 1,
                     bgFill: mod.UIBgFill.None,
-                    playerID: playerID,
+                    playerId: seal.player,
                     children: [
                       {
                         name: "Button_PreviousPlayer",
@@ -2754,7 +2790,7 @@ export namespace UI {
                         buttonAlphaHover: 1,
                         buttonColorFocused: [0.5, 0.5, 0.5],
                         buttonAlphaFocused: 1,
-                        playerID: playerID
+                        playerId: seal.player
                       },
                       {
                         name: "Text_PreviousPlayer",
@@ -2772,21 +2808,8 @@ export namespace UI {
                         textAlpha: 0.8,
                         textSize: 24,
                         textAnchor: mod.UIAnchor.Center,
-                        playerID: playerID
+                        playerId: seal.player
                       }
-                      // {
-                      //   name: "Container_PreviousPlayer_Outline",
-                      //   type: "Container",
-                      //   position: [0, 0],
-                      //   size: [100, 130],
-                      //   anchor: mod.UIAnchor.TopLeft,
-                      //   visible: true,
-                      //   padding: 0,
-                      //   bgColor: [1, 1, 1],
-                      //   bgAlpha: 0.3,
-                      //   bgFill: mod.UIBgFill.OutlineThin,
-                      //   playerID: playerID
-                      // }
                     ]
                   },
                   {
@@ -2800,7 +2823,7 @@ export namespace UI {
                     bgColor: [0.2, 0.2, 0.2],
                     bgAlpha: 1,
                     bgFill: mod.UIBgFill.None,
-                    playerID: playerID,
+                    playerId: seal.player,
                     children: [
                       {
                         name: "Button_NextPlayer",
@@ -2824,7 +2847,7 @@ export namespace UI {
                         buttonAlphaHover: 1,
                         buttonColorFocused: [0.5, 0.5, 0.5],
                         buttonAlphaFocused: 1,
-                        playerID: playerID
+                        playerId: seal.player
                       },
                       {
                         name: "Text_NextPlayer",
@@ -2842,21 +2865,8 @@ export namespace UI {
                         textAlpha: 0.8,
                         textSize: 24,
                         textAnchor: mod.UIAnchor.Center,
-                        playerID: playerID
+                        playerId: seal.player
                       }
-                      //    {
-                      //      name: "Container_NextPlayer_Outline",
-                      //      type: "Container",
-                      //      position: [0, 0],
-                      //      size: [100, 130],
-                      //      anchor: mod.UIAnchor.TopLeft,
-                      //      visible: true,
-                      //      padding: 0,
-                      //      bgColor: [1, 1, 1],
-                      //      bgAlpha: 0.3,
-                      //      bgFill: mod.UIBgFill.OutlineThin,
-                      //      playerID: playerID
-                      //    }
                     ]
                   },
                   {
@@ -2870,7 +2880,7 @@ export namespace UI {
                     bgColor: [0.0745, 0.1843, 0.2471],
                     bgAlpha: 0.1,
                     bgFill: mod.UIBgFill.Blur,
-                    playerID: playerID,
+                    playerId: seal.player,
                     children: [
                       {
                         name: "Text_PlayerName",
@@ -2883,12 +2893,12 @@ export namespace UI {
                         bgColor: [0.2, 0.2, 0.2],
                         bgAlpha: 1,
                         bgFill: mod.UIBgFill.None,
-                        textLabel: "Player Name: x",
+                        textLabel: mod.stringkeys.playerNameX,
                         textColor: [1, 1, 1],
                         textAlpha: 1,
                         textSize: 24,
                         textAnchor: mod.UIAnchor.Center,
-                        playerID: playerID
+                        playerId: seal.player
                       }
                     ]
                   },
@@ -2903,7 +2913,7 @@ export namespace UI {
                     bgColor: [0.0745, 0.1843, 0.2471],
                     bgAlpha: 0.1,
                     bgFill: mod.UIBgFill.Blur,
-                    playerID: playerID,
+                    playerId: seal.player,
                     children: [
                       {
                         name: "Button_LoadoutEditor",
@@ -2927,7 +2937,7 @@ export namespace UI {
                         buttonAlphaHover: 1,
                         buttonColorFocused: [0.5, 0.5, 0.5],
                         buttonAlphaFocused: 1,
-                        playerID: playerID
+                        playerId: seal.player
                       },
                       {
                         name: "Text_LoadoutEditor",
@@ -2945,7 +2955,7 @@ export namespace UI {
                         textAlpha: 0.8,
                         textSize: 24,
                         textAnchor: mod.UIAnchor.Center,
-                        playerID: playerID
+                        playerId: seal.player
                       },
                       {
                         name: "Container_LoadoutEditor_Outline",
@@ -2958,7 +2968,7 @@ export namespace UI {
                         bgColor: [1, 1, 1],
                         bgAlpha: 0.3,
                         bgFill: mod.UIBgFill.OutlineThin,
-                        playerID: playerID
+                        playerId: seal.player
                       }
                     ]
                   }
@@ -2979,7 +2989,7 @@ export namespace UI {
                 mod.SetUITextLabel(this.playerNameText, mod.Message("NO PLAYER FOUND"));
                 return;
             }
-            mod.SetUITextLabel(this.playerNameText, mod.Message("{}", this.seal.camera.attachedPlayer));
+            mod.SetUITextLabel(this.playerNameText, mod.Message(mod.stringkeys.playerNameX, this.seal.camera.attachedPlayer));
         }
 
         async onUIButtonEvent(widget: mod.UIWidget, event: any): Promise<void>
@@ -3021,6 +3031,12 @@ export namespace UI {
 }
 
 export namespace Utility {
+
+    export enum InputPattern{
+        DoubleTap,
+        TripleTap,
+        LongHold
+    }
 
     export class Input
     {
