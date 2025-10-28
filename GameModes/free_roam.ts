@@ -285,124 +285,52 @@ export namespace SOCOM {
         cameraType: mod.Cameras; // current camera type
         attachedPlayer: mod.Player; // attached player 
         viewType: SoldierCameraView; // current view type
-        isSpectateMode: boolean = false; // whether the camera is in spectate mode
-        isSpectatingPlayer: boolean = false; // whether the camera is in spectating mode
         isZooming: boolean = false; // whether the player is currently zooming
-    
-        // UI Elements
-        spectateUI;
-    
-    
+
         constructor(sealPlayer: CZSeal)
         {
           this.sealPlayer = sealPlayer;
           this.attachedPlayer = sealPlayer.player;
           this.cameraType = mod.Cameras.ThirdPerson;
           this.viewType = SoldierCameraView.RightShoulder;
-          this.spectateUI = undefined as any;
         }
-    
+
+        /* updates the camera instance */
         update():void
         {
             this.updateCameraView();
         }
-    
-        updateCameraView(): void
+
+        /* updates the camera view based on zoom state and shoulder view */
+        private updateCameraView(): void
         {
+            let bShouldUpdateCameraView = false;
+
+            /* get interact state */
+            let isInteracting = mod.GetSoldierState(this.sealPlayer.player, mod.SoldierStateBool.IsInteracting);
+            if (this.sealPlayer.inputDetector.dtcInput(this.sealPlayer.player, isInteracting))
+            {
+                this.switchShoulderView();
+                bShouldUpdateCameraView = true;
+            }
+
             /* get zoom state */
             let isCurrentlyZooming = mod.GetSoldierState(this.sealPlayer.player, mod.SoldierStateBool.IsZooming);
-            if (isCurrentlyZooming == this.isZooming)
+            if (isCurrentlyZooming !== this.isZooming)
+                bShouldUpdateCameraView = true;
+            
+            /* early exit if no update needed */
+            if (!bShouldUpdateCameraView)
                 return;
-    
-            /* detect zoom pattern for shoulder switching */
-            if (this.sealPlayer.inputDetector.dtcInput(this.sealPlayer.player, isCurrentlyZooming))
-                this.switchShoulderView();
-    
+
             /* set zoom state */
             this.isZooming = isCurrentlyZooming;
             let currentShoulder = this.viewType === SoldierCameraView.RightShoulder ? 0 : 1;
-            
+
             /* update camera */
             mod.SetCameraTypeForPlayer(this.sealPlayer.player, this.isZooming ? mod.Cameras.FirstPerson : mod.Cameras.ThirdPerson, currentShoulder);
         }
-    
-        enterSpectatorMode(): void
-        {
-          /* find closest alive player to spectate */
-          let closestPlayer = mod.ClosestPlayerTo(this.sealPlayer.soldierTM.location, mod.GetTeam(this.sealPlayer.teamID)); // find closest team player
-          if (!closestPlayer)
-            return;
-    
-          /* RESTRICT PLAYER INPUTS */
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.MoveForwardBack, true);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.MoveLeftRight, true);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.CameraPitch, true);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.CameraYaw, true);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Crouch, true);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Jump, true);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Prone, true);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Interact, true);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.FireWeapon, true);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.FireWeapon, true);
-    
-          try {
-            /* remove equipment */
-            this.sealPlayer.Disarm();
-          }
-          catch (e) {}
-    
-          this.isSpectateMode = true;
-    
-          this.AttachToPlayer(closestPlayer); // attach to closest player
-    
-          mod.EnableUIInputMode(true);  // enable UI input mode
-        }
-    
-        exitSpectatorMode(): void
-        {
-          /* UNRESTRICT PLAYER INPUTS */
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.MoveForwardBack, false);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.MoveLeftRight, false);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.CameraPitch, false);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.CameraYaw, false);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Crouch, false);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Jump, false);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Prone, false);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.Interact, false);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.FireWeapon, false);
-          mod.EnableInputRestriction(this.sealPlayer.player, mod.RestrictedInputs.FireWeapon, false);
-    
-    
-          this.isSpectateMode = false;
-    
-          this.AttachToPlayer(this.sealPlayer.player); // reattach to self
-    
-          mod.EnableUIInputMode(false);  // disable UI input mode
-        }
-    
-        AttachToPlayer(player: mod.Player): void
-        {
-          /*
-            ========== Start ==========
-            Exception: NoMatchingOverload
-            Function: SetCameraTargetForPlayer
-            Error info: 
-                Provided parameters () do not match any overload. Function supports the following overloads: (Player, Player).
-            ========== End ==========
-          */
-    
-            /* SET ATTACHED PLAYER */
-            this.attachedPlayer = player;
-    
-            /* SET CAMERA TARGET TO PLAYER */
-            
-            //@ ts-ignore
-            mod.SetCameraTargetForPlayer(this.sealPlayer, player);
-    
-            /* UPDATE FLAG */
-            this.isSpectatingPlayer = this.attachedPlayer !== this.sealPlayer.player;
-        }
-    
+
         /* switch between left and right shoulder view */
         private switchShoulderView(): void
         {
@@ -410,7 +338,6 @@ export namespace SOCOM {
                 SoldierCameraView.LeftShoulder : 
                 SoldierCameraView.RightShoulder;
         }
-        
     }
 
     
