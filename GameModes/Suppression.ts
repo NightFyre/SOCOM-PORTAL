@@ -38,11 +38,13 @@ const DEPLOY_CAMERA = 3;
 const PLAYER_SPAWNERS = 50; // 50 - 99 (Team Spawn Points)
 const AI_SPAWNERS = 100; // 100 - 101 (HQ AI) | 102 (HOSTAGE) | 103 (VIP) | 104 (BOMB)
 const WORLD_ICON_PLAYERS = 700; // 700 - 715
+const SPECTATOR_OBJECTS = 50; // 50 - 51
 const MIN_PLAYERS_TO_START = 1; // minimum players required to start the match
 const MAX_PLAYERS_FOR_BOTS = 8; // maximum players before bots are removed
 const MAX_PLAYERS = 32;
 const MAX_PLAYERS_PER_TEAM = MAX_PLAYERS / 2;
 const END_ROUND_ON_LAST_ELIMINATED_PLAYER = true; // whether to end the round when the last player on a team is eliminated when bots are backfilling empty player slots
+const BOTS_IDLE = false; // whether bots should remain idle and not engage in combat
 
 ////////////////////////////////// PLAYER EVENTS ///////////////////////////////////////
 
@@ -135,7 +137,9 @@ export async function OnGameModeStarted()
     //      console.log("found deploy cam , resetting transform");
     //  }
 
-    // setup world icons
+    SOCOM.CZMatchData.initialize();
+
+    // setup player tag world icons
     for (let i = 0; i < 32; i++)
     {
         const icon = mod.GetWorldIcon(WORLD_ICON_PLAYERS + i); // preload team player icons
@@ -147,6 +151,35 @@ export async function OnGameModeStarted()
         mod.SetWorldIconColor(icon, mod.CreateVector(1, 1, 1)); // white color
         mod.SetWorldIconPosition(icon, mod.CreateVector(0, 0, -100000)); // move icon out of view and bury it deep
     }
+
+    // get bot spawners , HQs , and spectator spawn points
+    for (let i = 0; i < 2; i++)
+    {
+        let botSpawner = mod.GetSpawner(AI_SPAWNERS + i);
+        if (botSpawner)
+        {
+            let spawnOrigin = mod.GetObjectPosition(botSpawner);
+            console.log(`${i == 0 ? "SEAL" : "MERC"} bot spawner point obtained: x: ${mod.XComponentOf(spawnOrigin)}, y: ${mod.YComponentOf(spawnOrigin)}, z: ${mod.ZComponentOf(spawnOrigin)}`);
+            SOCOM.CZMatchData.botSpawners.push(botSpawner); // get bot spawners for each team
+        }
+
+        let hq = mod.GetHQ(HQ + i);
+        if (hq)
+        {
+            let spawnOrigin = mod.GetObjectPosition(hq);
+            console.log(`${i == 0 ? "SEAL" : "MERC"} HQ point obtained: x: ${mod.XComponentOf(spawnOrigin)}, y: ${mod.YComponentOf(spawnOrigin)}, z: ${mod.ZComponentOf(spawnOrigin)}`);
+            SOCOM.CZMatchData.HeadQuarters.push(hq); // get HQ objects for each team
+        }
+
+        const spectator_spawn = mod.GetSpatialObject(SPECTATOR_OBJECTS + i); // create spectator world icons for each team
+        if (spectator_spawn)
+        {
+            let iconOrigin = mod.GetObjectPosition(spectator_spawn);
+            console.log(`${i == 0 ? "SEAL" : "MERC"} spawn point obtained: x: ${mod.XComponentOf(iconOrigin)}, y: ${mod.YComponentOf(iconOrigin)}, z: ${mod.ZComponentOf(iconOrigin)}`);
+            SOCOM.CZMatchData.spawnOrigins.push(iconOrigin); // get spawn origins for each team
+        }
+    }
+    SOCOM.CZMatchData.isSpawnModeEnabled = mod.GetObjId(SOCOM.CZMatchData.botSpawners[0]) !== -1 && mod.GetObjId(SOCOM.CZMatchData.botSpawners[1]) !== -1;
 
     while (true)
     {
@@ -742,6 +775,9 @@ export namespace SOCOM
             if (!this.isSealAlive() || !this.isAI)
                 return;
 
+            if (BOTS_IDLE)
+                return;
+
             let currentTime = mod.GetMatchTimeElapsed();
             if (currentTime - this.lastAIPathUpdateTime < 5) // update every 5 seconds
                 return;
@@ -1013,6 +1049,14 @@ export namespace SOCOM
             if (!this.isAI)
                 return;
 
+            if (BOTS_IDLE)
+            {
+                mod.AIEnableShooting(this.player, false);
+                mod.AIEnableTargeting(this.player, false);
+                mod.AIIdleBehavior(this.player);
+                return; // bots are set to idle mode globally
+            }
+
             mod.AIEnableShooting(this.player, attack);
             mod.AIEnableTargeting(this.player, attack);
 
@@ -1056,8 +1100,8 @@ export namespace SOCOM
     export class CZMatchData
     {
         static state: GameState = GameState.WaitingForPlayers; // current game state
-        static host: mod.Player | undefined; // host player
-        static hostID: number = -1; // host player ID
+        //  static host: mod.Player | undefined; // host player
+        //  static hostID: number = -1; // host player ID
         static matchTime: number = 0; // total accumulated match time in seconds
         static players: number = 0; // total players in the match ( includes bots)
         static bots: number = 0; // number of AI bots in the match
@@ -1077,32 +1121,13 @@ export namespace SOCOM
 
         private constructor() {}
 
-        static initialize(host: mod.Player): void
+        static initialize(): void
         {
             CZMatchData.state = GameState.WaitingForPlayers;
-            CZMatchData.host = host;
-            CZMatchData.hostID = mod.GetObjId(host);
-            CZMatchData.players++; // increment player count for human players
-            CZMatchData.teams[mod.GetObjId(mod.GetTeam(host)) - 1]++; // increment team player count for human players
-            for (let i = 0; i < 2; i++)
-            {
-                let botSpawner = mod.GetSpawner(AI_SPAWNERS + i);
-                if (botSpawner)
-                {
-                    let spawnOrigin = mod.GetObjectPosition(botSpawner);
-                    CZMatchData.spawnOrigins.push(spawnOrigin);
-                    CZMatchData.botSpawners.push(botSpawner); // get bot spawners for each team
-
-                }
-                let hq = mod.GetHQ(HQ + i);
-                if (hq)
-                {
-                    let spawnOrigin = mod.GetObjectPosition(hq);
-                    CZMatchData.spawnOrigins.push(spawnOrigin);
-                    CZMatchData.HeadQuarters.push(hq); // get HQ objects for each team
-                }
-            }
-            CZMatchData.isSpawnModeEnabled = mod.GetObjId(CZMatchData.botSpawners[0]) !== -1 && mod.GetObjId(CZMatchData.botSpawners[1]) !== -1;
+            //  CZMatchData.host = host;
+            //  CZMatchData.hostID = mod.GetObjId(host);
+            //  CZMatchData.players++; // increment player count for human players
+            //  CZMatchData.teams[mod.GetObjId(mod.GetTeam(host)) - 1]++; // increment team player count for human players
         }
 
         static reset(): void
@@ -1496,11 +1521,8 @@ export namespace SOCOM
             log.info(mod.Message("{} joined the game", eventPlayer, seal.teamID));
 
             mod.SetRedeployTime(eventPlayer, 0.0); // disable redeploy timer
-
-            // Initialize game with first player as host
-            if (CZMatchData.players === 0 && !CZMatchData.host) {
-                CZMatchData.initialize(eventPlayer);
-            } else if (!seal.isAI) {
+            
+            if (!seal.isAI) {
             /* add player count to match data (bots are handled separately in OnSpawnBot) */
                 CZMatchData.players++; // increment player count for human players
                 CZMatchData.teams[seal.teamID - 1]++; // increment team player count for human players
@@ -1570,6 +1592,7 @@ export namespace SOCOM
 
             seal.playerTeam = mod.GetTeam(eventPlayer); // update team
             seal.teamID = mod.GetObjId(seal.playerTeam); // update teamID
+            seal.isArmed = true; // assume player is armed on spawn
 
             console.log(`[CZMatchData::OnPlayerSpawned] Player ${seal.playerID} spawn check: hasSpawned=${seal.hasSpawned}, isAlive=${seal.isAlive}, shouldSpectateOnNextSpawn=${seal.shouldSpectateOnNextSpawn}, gameState=${GameState[CZMatchData.state]}`);
 
@@ -1580,6 +1603,7 @@ export namespace SOCOM
                 console.log(`[CZMatchData::OnPlayerSpawned] Player ${seal.playerID} should spectate (died previously) for team ${seal.teamID} | isAI: ${seal.isAI} | isAlive: ${seal.isAlive}`);
                 seal.SetSpectatorMode(true);
                 seal.Disarm(); // disarm the player
+                mod.Teleport(seal.player, CZMatchData.spawnOrigins[seal.teamID - 1], 0); // teleport to team spawn origin
                 return; // go to spectator mode
             }
 
