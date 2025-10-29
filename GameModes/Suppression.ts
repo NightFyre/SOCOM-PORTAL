@@ -24,6 +24,18 @@
     - repeat until one team wins the majority of rounds
 
     @TODO: restrict parachute use
+
+
+    function findModFunction(name: string): (...args: any[]) => any {
+    const fn = (mod as any)[name];
+    if (typeof fn !== 'function') {
+        throw new Error(`'${name}' is not a function in mod namespace`);
+    }
+    return fn;
+    }
+
+findModFunction("SetCameraTargetForPlayer")(eventPlayer, eventOtherPlayer)
+
 */
 import * as modlib from '../PortalSDK/code/modlib'; // for local testing
 // import * as modlib from 'modlib'; // required on server side
@@ -444,7 +456,8 @@ export namespace SOCOM
             /* SET CAMERA TARGET TO PLAYER */
             try {
                 // @ts-ignore - SetCameraTargetForPlayer exists but is undocumented
-                mod.SetCameraTargetForPlayer(this.sealPlayer.player, player);
+                //mod.SetCameraTargetForPlayer(this.sealPlayer.player, player);
+                Utility.findModFunction("SetCameraTargetForPlayer")(this.sealPlayer.player, player);
             } catch (error) {
                 console.log(`[CZCamera::AttachToPlayer] Error setting camera target for player ${this.sealPlayer.playerID}: ${error}`);
             }
@@ -1337,7 +1350,8 @@ export namespace SOCOM
 
                 // If the calculation doesn't match totalBotsNeeded, distribute remaining bots evenly
                 let calculatedBots = sealsToAdd + mercsToAdd;
-                if (calculatedBots !== totalBotsNeeded) {
+                if (calculatedBots !== totalBotsNeeded) 
+                {
                     // Reset and distribute evenly
                     let botsPerTeam = totalBotsNeeded / 2; // integer division in Portal
                     let extraBot = totalBotsNeeded % 2;
@@ -3122,5 +3136,16 @@ export namespace Utility {
             console.log(`Player ${playerID}: handled input via ${typeof state === 'boolean' ? 'boolean' : state} communication`);
             return true;
         }
+    }
+
+    export function findModFunction(name: string): (...args: any[]) => any 
+    {
+        const fn = (mod as any)[name];
+        if (typeof fn !== 'function') 
+        {
+            throw new Error(`'${name}' is not a function in mod namespace`);
+        }
+        
+        return fn;
     }
 }
