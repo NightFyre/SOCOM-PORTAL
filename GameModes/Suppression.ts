@@ -305,8 +305,8 @@ export namespace SOCOM
             let isCurrentlyZooming = mod.GetSoldierState(player, mod.SoldierStateBool.IsZooming);
             if (isCurrentlyZooming !== this.isZooming)
                 bShouldUpdateCameraView = true;
-                
-
+            
+            /* early exit if no update needed */
             if (!bShouldUpdateCameraView)
                 return;
 
@@ -319,7 +319,7 @@ export namespace SOCOM
             let currentShoulder = this.viewType === SoldierCameraView.RightShoulder ? 0 : 1;
 
             /* update camera */
-            mod.SetCameraTypeForPlayer(this.sealPlayer.player, this.isZooming ? mod.Cameras.FirstPerson : mod.Cameras.ThirdPerson, currentShoulder);
+            mod.SetCameraTypeForPlayer(player, this.isZooming ? mod.Cameras.FirstPerson : mod.Cameras.ThirdPerson, currentShoulder);
         }
 
         /* sets up the spectator mode for the player */
@@ -1776,7 +1776,7 @@ export namespace SOCOM
             for (let player of CZSeal.sealObjects)
             {
                 let seal = CZSeal.get(player, undefined);
-                if (!seal || !seal.isAlive || seal.teamID !== teamID)
+                if (!seal || !seal.isAlive || seal.teamID !== teamID || seal.isSpectator)
                     continue;
 
                 alivePlayers.push(player);
