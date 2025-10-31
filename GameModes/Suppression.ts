@@ -24,19 +24,6 @@
     - repeat until one team wins the majority of rounds
 
     @TODO: restrict parachute use
-
-
-    function findModFunction(name: string): (...args: any[]) => any {
-    const fn = (mod as any)[name];
-    if (typeof fn !== 'function') {
-        throw new Error(`'${name}' is not a function in mod namespace`);
-    }
-    return fn;
-    }
-
-findModFunction("SetCameraTargetForPlayer")(eventPlayer, eventOtherPlayer)
-(mod as any)?.SetCameraTargetForPlayer?.(player, randomPlayer);
-
 */
 import * as modlib from '../PortalSDK/code/modlib'; // for local testing
 // import * as modlib from 'modlib'; // required on server side
@@ -282,6 +269,9 @@ export namespace SOCOM
         isSpectatingPlayer: boolean = false; // whether the camera is in spectating mode
         isZooming: boolean = false; // whether the player is currently zooming
 
+        // Methods
+        private static SetCameraTargetForPlayer_stub:(player: mod.Player, target: mod.Player) => void;
+
         // UI Elements
         spectateUI;
 
@@ -293,6 +283,8 @@ export namespace SOCOM
           this.cameraType = mod.Cameras.ThirdPerson;
           this.viewType = SoldierCameraView.RightShoulder;
           this.spectateUI = undefined as any;
+          if (!CZCamera.SetCameraTargetForPlayer_stub)
+              CZCamera.SetCameraTargetForPlayer_stub = Utility.findModFunction("SetCameraTargetForPlayer");
         }
 
         /* updates the camera instance */
@@ -457,8 +449,9 @@ export namespace SOCOM
             /* SET CAMERA TARGET TO PLAYER */
             try {
                 // @ts-ignore - SetCameraTargetForPlayer exists but is undocumented
-                //mod.SetCameraTargetForPlayer(this.sealPlayer.player, player);
-                Utility.findModFunction("SetCameraTargetForPlayer")(this.sealPlayer.player, player);
+                // (mod as any)?.SetCameraTargetForPlayer?.(player, randomPlayer); would be another way to do this
+                //  Utility.findModFunction("SetCameraTargetForPlayer")(this.sealPlayer.player, player);
+                CZCamera.SetCameraTargetForPlayer_stub(this.sealPlayer.player, player);
             } catch (error) {
                 console.log(`[CZCamera::AttachToPlayer] Error setting camera target for player ${this.sealPlayer.playerID}: ${error}`);
             }
@@ -2135,7 +2128,7 @@ const log = new Logging.Logger(Logging.LogLevel.Debug, 10, 10); // LogLevel, max
 // https://discord.com/channels/870246147455877181/1428410039080718487
 export namespace UI {
 
-    // MATCH SCORE WIDGET
+    // MATCH INFO - SCORES - TIMER - ALIVE COUNTERS
     export class RoundInfoWidget
     {
         static widget = modlib.ParseUI(
@@ -2481,6 +2474,7 @@ export namespace UI {
         }
     }
 
+    // PLAYER ORIGIN & INFO
     export class PlayerOriginWidget {
         
         OriginWidget: mod.UIWidget | undefined;
@@ -2759,6 +2753,7 @@ export namespace UI {
         }
     }
 
+    // SPECTATE CAMERA CONTROLS
     export class SpectateCamWidget {
         OriginWidget: mod.UIWidget | undefined;
         seal: SOCOM.CZSeal;
@@ -3139,6 +3134,7 @@ export namespace Utility {
         }
     }
 
+    
     export function findModFunction(name: string): (...args: any[]) => any 
     {
         const fn = (mod as any)[name];
