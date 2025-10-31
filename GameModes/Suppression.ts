@@ -122,6 +122,7 @@ export async function OnGameModeStarted()
 
     /* Initialize UI widgets */
     UI.RoundInfoWidget.init();
+    UI.ScoreboardWidget.init();
 
     //  for ( let spawner of matchData.botSpawners )
     //      mod.AISetUnspawnOnDead(spawner, true); // set spawners to unspawn bots on death
@@ -138,6 +139,25 @@ export async function OnGameModeStarted()
     //  }
 
     SOCOM.CZMatchData.initialize();
+
+    // setup scoreboard 
+    {
+        mod.SetGameModeScore(mod.GetTeam(1), 0);
+        mod.SetGameModeScore(mod.GetTeam(2), 0);
+        mod.SetScoreboardType(mod.ScoreboardType.CustomTwoTeams);
+        mod.SetScoreboardHeader(mod.Message("SEALS"), mod.Message("MERCS"));
+
+        mod.SetScoreboardColumnNames(
+            mod.Message(mod.stringkeys.sbCol1), // Score 
+            mod.Message(mod.stringkeys.sbCol2), // Kills
+            mod.Message(mod.stringkeys.sbCol3), // Deaths
+            mod.Message(mod.stringkeys.sbCol4), // Assists
+            mod.Message(mod.stringkeys.sbCol5), // Alive
+        )
+
+        let colWidth = 10;
+        mod.SetScoreboardColumnWidths(colWidth, colWidth, colWidth, colWidth, colWidth);
+    }
 
     // setup player tag world icons
     for (let i = 0; i < 32; i++)
@@ -493,12 +513,15 @@ export namespace SOCOM
     export class CZSealStats
     {
         /* POINTS 
-            - kill: 3 points
+            - kill: 3 points [headshot kill: 4 points]
             - assist: 1 point
-            - suicide: -1 point
-            - friendly kill: -2 points
+            - suicide: -2 points
+            - friendly kill: -3 points
             - survive round: 1 point
             - bomb plant/defuse: 6 points
+            - bomb detonate: 1 point
+            - extract hostage: 6 points
+            - extract vip: 6 points
         */
         score: number[] = [0, 0]; // current round score , total score
         kills: number[] = [0, 0]; // number of kills
@@ -518,6 +541,7 @@ export namespace SOCOM
         // Reset round stats
         resetRound(): void
         {
+            this.score[0] = this.__tallyScore(); // calculate round score
             this.score[1] += this.score[0];
             this.score[0] = 0; // reset round stats
             this.kills[1] += this.kills[0];
@@ -564,10 +588,16 @@ export namespace SOCOM
             this.friendlyFireKills = [0, 0];
         }
 
-        tallyScore(): number
+        /* helper method to refresh the score tally */
+        refresh() : void
+        {
+            this.__tallyScore();
+        }
+
+        private __tallyScore(): number
         {
             /* elimination logic */
-            this.score[0] = this.kills[0] * 3 + this.assists[0] * 1 + this.deaths[0] * -1;
+            this.score[0] = this.kills[0] * 3 + this.headshotKills[0] * 1 + this.assists[0] * 1 + this.friendlyFireKills[0] * -3;
             return this.score[0];
         }
     }
@@ -898,11 +928,12 @@ export namespace SOCOM
             }
 
             /* set death state */
-            this.isAlive = false;
-            this.stats.deaths[0]++;
-            this.currentHealth = 0;
-            mod.EnableWorldIconText(this.teamIcon, false);
-            
+            this.isAlive = false;          // set player as dead
+            this.stats.deaths[0]++; // increment death count
+            this.currentHealth = 0; // sync current health
+            mod.EnableWorldIconText(this.teamIcon, false); // disable name tag on death
+            this.__updateScoreboardEntry(); // update scoreboard entry
+
             // Set flag for spectator mode on next spawn (only for human players)
             if (!this.isAI) {
                 this.shouldSpectateOnNextSpawn = true;
@@ -960,9 +991,29 @@ export namespace SOCOM
             killerSeal.stats.kills[0]++;
             if (mod.EventDeathTypeCompare(eventDeathType, mod.PlayerDeathTypes.Headshot))
                 killerSeal.stats.headshotKills[0]++;
-
+            killerSeal.__updateScoreboardEntry(); // update killer scoreboard entry
+            
             mod.DisplayNotificationMessage(mod.Message("REDEPLOY TO SPECTATE"), this.player);
             console.log(`[CZSeal::OnPlayerDied] Player ${killerSeal.playerID} eliminated Player ${this.playerID}`);
+        }
+
+        /* called at the beginning of a round / match */
+        async OnPlayerSpawned(): Promise<void>
+        {
+            console.log(`[CZSeal::OnPlayerSpawned] Player ${this.playerID} setting hasSpawned = true (was ${this.hasSpawned})`);
+            this.hasSpawned = true;
+            this.isAlive = true;
+
+            /* set camera type to 3rd person */
+            if (!this.isAI)
+            {
+                /* hack for fixing under map camera */
+                mod.SetCameraTypeForPlayer(this.player, mod.Cameras.FirstPerson); // set to first person
+                await mod.Wait(1); // wait 1 frame
+                mod.SetCameraTypeForPlayer(this.player, mod.Cameras.ThirdPerson, this.camera.viewType === SoldierCameraView.RightShoulder ? 0 : 1);
+            }
+            mod.EnableAllInputRestrictions(this.player, false); // disable input restrictions just incase anything is lingering from last round
+            this.__updateScoreboardEntry(); // update scoreboard entry
         }
 
         /* ACTIONS */
@@ -1090,6 +1141,22 @@ export namespace SOCOM
         {
             return mod.GetSoldierState(this.player, mod.SoldierStateBool.IsAlive);
         }
+
+        /* updates the scoreboard entry for the player */
+        private __updateScoreboardEntry(): void
+        {
+            this.stats.refresh(); // refresh score tally
+
+            // Update scoreboard values for the player
+            mod.SetScoreboardPlayerValues(
+                this.player,
+                this.stats.score[1] + this.stats.score[0],
+                this.stats.kills[1] + this.stats.kills[0],
+                this.stats.deaths[1] + this.stats.deaths[0],
+                this.stats.assists[1] + this.stats.assists[0],
+                this.isAlive ? 1 : 0
+            );
+        }
     }
 
     /// ------------------------------ CZMATCHDATA ------------------------------- ///
@@ -1120,11 +1187,12 @@ export namespace SOCOM
         static isSpawnModeEnabled: boolean = false; // whether spawn mode is enabled [ determnined via obtaining bot spawners in the map ]
 
         // SUPPRESSION DATA
-        static roundNum: number = 0; // current rounds
+        static roundNum: number = 0; // current round
         static roundMax: number = 11; // best of 11 rounds (first to 6 wins)
         static roundTime: number = 0; // time left for the current round in seconds
         static roundTimeMax: number = 240; // max round time in seconds ( 4 minutes )
         static scores: number[] = [0, 0]; // rounds won [team1, team2]
+        static currentRoundWinner: number = 0; // team ID of the current round winner (0 = no winner yet)
 
         private constructor() {}
 
@@ -1144,6 +1212,7 @@ export namespace SOCOM
             CZMatchData.roundMax = 11;
             CZMatchData.roundTime = 0;
             CZMatchData.roundTimeMax = 240;
+            CZMatchData.currentRoundWinner = 0;
             CZMatchData.matchTime = 0;
             CZMatchData.players = 0;
             CZMatchData.bots = 0;
@@ -1279,7 +1348,8 @@ export namespace SOCOM
             }
             //  log.info(mod.Message("MERCS Rounds Won: {}", CZMatchData.scores[1]));
 
-            await mod.Wait(15); // wait 15 seconds before resetting the match
+            await UI.ScoreboardWidget.render(15); // display scoreboard for 15 seconds
+            // await mod.Wait(15); // wait 15 seconds before resetting the match
 
             let host = CZMatchData.getHostPlayer();
             if (host)
@@ -1292,6 +1362,7 @@ export namespace SOCOM
             console.log(`[CZMatchData::preRound] Preparing for Round ${CZMatchData.roundNum + 1}`);
          
             CZMatchData.state = GameState.PreRound; // transition to pre-round state
+            CZMatchData.currentRoundWinner = 0;
 
             mod.SetSpawnMode(mod.SpawnModes.AutoSpawn); // force auto spawn
             mod.EnableAllPlayerDeploy(true); // enable deploy for all players
@@ -1323,11 +1394,13 @@ export namespace SOCOM
                 await mod.Wait(0.2); // wait a bit between spawns for proper registration
 
                 /* set input restriction for pre-round */
-                seal.SetInputMode(true);
+                // seal.SetInputMode(true);
                 mod.DeployPlayer(seal.player); // deploy the player
                 mod.SetWorldIconOwner(seal.teamIcon, seal.playerTeam);
                 mod.EnableWorldIconText(seal.teamIcon, true);
             }
+
+            CZMatchData.startRound(); // start a new round
 
             /* add bots if player count is low (only count human players) */
             let humanPlayers = CZMatchData.players - CZMatchData.bots;
@@ -1379,9 +1452,7 @@ export namespace SOCOM
 
             mod.SetSpawnMode(mod.SpawnModes.Deploy); // restore normal spawn mode
 
-            await mod.Wait(5); // wait a few seconds before starting the round
-
-            CZMatchData.startRound(); // start a new round
+            // await mod.Wait(5); // wait a few seconds before starting the round
         }
 
         /* starts a new round */
@@ -1416,6 +1487,7 @@ export namespace SOCOM
         static  async endRound(winner: number): Promise<void>
         {
             CZMatchData.state = GameState.RoundEnd;
+            CZMatchData.currentRoundWinner = winner;
 
             mod.EnableAllPlayerDeploy(false); // disable redeployment for all players
 
@@ -1508,13 +1580,15 @@ export namespace SOCOM
             CZMatchData.bots = 0; // reset bot count
 
             /* Check for match end */
+            // @TODO: implement overtime rounds for ties at max score
             if (CZMatchData.scores[0] >= 6 || CZMatchData.scores[1] >= 6 || CZMatchData.roundNum >= CZMatchData.roundMax)
                 await CZMatchData.endMatch();
             else
             {
                 // @TODO: display scoreboard ui
                 mod.DisplayNotificationMessage(mod.Message("PREPARING FOR THE NEXT ROUND"));
-                await mod.Wait(7); // wait a few seconds before preparing for the next round
+                await UI.ScoreboardWidget.render(7); // display scoreboard for 7 seconds
+                //  await mod.Wait(7); // wait a few seconds before preparing for the next round
                 await CZMatchData.preRound(); // prepare for the next round
             }
         }
@@ -1627,19 +1701,7 @@ export namespace SOCOM
             /* new round spawn , set player state */
 
             /* set seal state */
-            console.log(`[CZMatchData::OnPlayerSpawned] Player ${seal.playerID} setting hasSpawned = true (was ${seal.hasSpawned})`);
-            seal.hasSpawned = true;
-            seal.isAlive = true;
-
-            /* set camera type to 3rd person */
-            if (!seal.isAI)
-            {
-                /* hack for fixing under map camera */
-                mod.SetCameraTypeForPlayer(eventPlayer, mod.Cameras.FirstPerson); // set to first person
-                mod.Wait(1); // wait 1 frame
-                mod.SetCameraTypeForPlayer(seal.player, mod.Cameras.ThirdPerson, seal.camera.viewType === SoldierCameraView.RightShoulder ? 0 : 1);
-            }
-            mod.EnableAllInputRestrictions(seal.player, false); // disable input restrictions just incase anything is lingering from last round
+            seal.OnPlayerSpawned();
 
             console.log(`[CZMatchData::OnPlayerSpawned] Player ${seal.playerID} spawned for team ${seal.teamID} | isAI: ${seal.isAI} | hasSpawned: ${seal.hasSpawned} | isAlive: ${seal.isAlive}`);
         }
@@ -1819,7 +1881,7 @@ export namespace SOCOM
         // returns true if the game is in an active gameplay state excluding waiting for players
         static isGamePlayActive(): boolean
         {
-            return CZMatchData.state === GameState.PreRound || CZMatchData.state === GameState.RoundActive || CZMatchData.state === GameState.RoundEnd || CZMatchData.state === GameState.MatchEnd;
+            return CZMatchData.state === GameState.PreRound || CZMatchData.state === GameState.RoundActive; // || CZMatchData.state === GameState.RoundEnd || CZMatchData.state === GameState.MatchEnd;
         }
 
         /* utility method to spawn an AI bot for the specified team */
@@ -2351,7 +2413,6 @@ export namespace UI {
         ]
         }
         );
-
 
         // Store widget references for updates
         static sealsText: mod.UIWidget | undefined;
@@ -3061,6 +3122,555 @@ export namespace UI {
         }
     }
 
+    export class ScoreboardWidget
+    {
+        // 
+        static widget = modlib.ParseUI(
+          {
+            name: "Container_ScoreboardMain",
+            type: "Container",
+            position: [0, 0],
+            size: [1920, 1080],
+            anchor: mod.UIAnchor.Center,
+            visible: true,
+            padding: 0,
+            bgColor: [0.0314, 0.0431, 0.0431],
+            bgAlpha: 1,
+            bgFill: mod.UIBgFill.Blur,
+            children: [
+              {
+                name: "Container_ScoreboardMain_Outline",
+                type: "Container",
+                position: [0, 0],
+                size: [1880, 1040],
+                anchor: mod.UIAnchor.Center,
+                visible: true,
+                padding: 0,
+                bgColor: [1, 0.9882, 0.6118],
+                bgAlpha: 0.5,
+                bgFill: mod.UIBgFill.OutlineThin
+              },
+              {
+                name: "Container_ScoreboardMain_Entry",
+                type: "Container",
+                position: [0, 0],
+                size: [1880, 1040],
+                anchor: mod.UIAnchor.Center,
+                visible: true,
+                padding: 0,
+                bgColor: [0.0745, 0.1843, 0.2471],
+                bgAlpha: 1,
+                bgFill: mod.UIBgFill.Blur,
+                children: [
+                  {
+                    name: "Container_MainBody_ScoreHeader",
+                    type: "Container",
+                    position: [0, 0],
+                    size: [1880, 200],
+                    anchor: mod.UIAnchor.TopCenter,
+                    visible: true,
+                    padding: 0,
+                    bgColor: [1, 1, 1],
+                    bgAlpha: 0.5,
+                    bgFill: mod.UIBgFill.OutlineThin,
+                    children: [
+                      {
+                        name: "Text_MainBody_RoundNumber",
+                        type: "Text",
+                        position: [0, 0],
+                        size: [600, 200],
+                        anchor: mod.UIAnchor.Center,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        textLabel: mod.stringkeys.Text_MainBody_RoundNumber,
+                        textColor: [1, 1, 1],
+                        textAlpha: 0.8,
+                        textSize: 90,
+                        textAnchor: mod.UIAnchor.Center
+                      },
+                      {
+                        name: "Text_ScoreboardTimer",
+                        type: "Text",
+                        position: [0, 0],
+                        size: [400, 50],
+                        anchor: mod.UIAnchor.BottomRight,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        textLabel: mod.stringkeys.Text_ScoreboardTimer,
+                        textColor: [1, 1, 1],
+                        textAlpha: 0.8,
+                        textSize: 24,
+                        textAnchor: mod.UIAnchor.CenterRight
+                      }
+                    ]
+                  },
+                  {
+                    name: "Container_MainBody_SealScoreHeader",
+                    type: "Container",
+                    position: [-470, 200],
+                    size: [940, 50],
+                    anchor: mod.UIAnchor.TopCenter,
+                    visible: true,
+                    padding: 0,
+                    bgColor: [0.2, 0.2, 0.2],
+                    bgAlpha: 1,
+                    bgFill: mod.UIBgFill.None,
+                    children: [
+                      {
+                        name: "Text_SealScoreHeader_TeamName",
+                        type: "Text",
+                        position: [0, 0],
+                        size: [100, 50],
+                        anchor: mod.UIAnchor.CenterLeft,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        textLabel: mod.stringkeys.Text_SealScoreHeader_TeamName,
+                        textColor: [1, 1, 1],
+                        textAlpha: 1,
+                        textSize: 24,
+                        textAnchor: mod.UIAnchor.Center
+                      },
+                      {
+                        name: "Text_SealScoreHeader_RoundConditionName",
+                        type: "Text",
+                        position: [0, 0],
+                        size: [100, 50],
+                        anchor: mod.UIAnchor.CenterRight,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        textLabel: mod.stringkeys.Text_SealScoreHeader_RoundConditionName,
+                        textColor: [1, 0.9882, 0.6118],
+                        textAlpha: 1,
+                        textSize: 24,
+                        textAnchor: mod.UIAnchor.Center
+                      },
+                      {
+                        name: "Container_SealScoreHeader_Kills",
+                        type: "Container",
+                        position: [540, 0],
+                        size: [100, 50],
+                        anchor: mod.UIAnchor.TopLeft,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        children: [
+                          {
+                            name: "Text_SealScoreHeader_Kills",
+                            type: "Text",
+                            position: [0, 0],
+                            size: [100, 50],
+                            anchor: mod.UIAnchor.TopLeft,
+                            visible: true,
+                            padding: 0,
+                            bgColor: [0.2, 0.2, 0.2],
+                            bgAlpha: 1,
+                            bgFill: mod.UIBgFill.None,
+                            textLabel: mod.stringkeys.Text_SealScoreHeader_Kills,
+                            textColor: [1, 1, 1],
+                            textAlpha: 1,
+                            textSize: 24,
+                            textAnchor: mod.UIAnchor.Center
+                          }
+                        ]
+                      },
+                      {
+                        name: "Container_SealScoreHeader_Deaths",
+                        type: "Container",
+                        position: [640, 0],
+                        size: [100, 50],
+                        anchor: mod.UIAnchor.TopLeft,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        children: [
+                          {
+                            name: "Text_SealScoreHeader_Deaths",
+                            type: "Text",
+                            position: [0, 0],
+                            size: [100, 50],
+                            anchor: mod.UIAnchor.TopLeft,
+                            visible: true,
+                            padding: 0,
+                            bgColor: [0.2, 0.2, 0.2],
+                            bgAlpha: 1,
+                            bgFill: mod.UIBgFill.None,
+                            textLabel: mod.stringkeys.Text_SealScoreHeader_Deaths,
+                            textColor: [1, 1, 1],
+                            textAlpha: 1,
+                            textSize: 24,
+                            textAnchor: mod.UIAnchor.Center
+                          }
+                        ]
+                      },
+                      {
+                        name: "Container_SealScoreHeader_Assists",
+                        type: "Container",
+                        position: [740, 0],
+                        size: [100, 50],
+                        anchor: mod.UIAnchor.TopLeft,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        children: [
+                          {
+                            name: "Text_SealScoreHeader_Assists",
+                            type: "Text",
+                            position: [0, 0],
+                            size: [100, 50],
+                            anchor: mod.UIAnchor.TopLeft,
+                            visible: true,
+                            padding: 0,
+                            bgColor: [0.2, 0.2, 0.2],
+                            bgAlpha: 1,
+                            bgFill: mod.UIBgFill.None,
+                            textLabel: mod.stringkeys.Text_SealScoreHeader_Assists,
+                            textColor: [1, 1, 1],
+                            textAlpha: 1,
+                            textSize: 24,
+                            textAnchor: mod.UIAnchor.Center
+                          }
+                        ]
+                      },
+                      {
+                        name: "Container_SealScoreHeader_Score",
+                        type: "Container",
+                        position: [440, 0],
+                        size: [100, 50],
+                        anchor: mod.UIAnchor.TopLeft,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        children: [
+                          {
+                            name: "Text_SealScoreHeader_Score",
+                            type: "Text",
+                            position: [0, 0],
+                            size: [100, 50],
+                            anchor: mod.UIAnchor.TopLeft,
+                            visible: true,
+                            padding: 0,
+                            bgColor: [0.2, 0.2, 0.2],
+                            bgAlpha: 1,
+                            bgFill: mod.UIBgFill.None,
+                            textLabel: mod.stringkeys.Text_SealScoreHeader_Score,
+                            textColor: [1, 1, 1],
+                            textAlpha: 1,
+                            textSize: 24,
+                            textAnchor: mod.UIAnchor.Center
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    name: "Container_MainBody_MercScoreHeader",
+                    type: "Container",
+                    position: [470, 200],
+                    size: [940, 50],
+                    anchor: mod.UIAnchor.TopCenter,
+                    visible: true,
+                    padding: 0,
+                    bgColor: [0.2, 0.2, 0.2],
+                    bgAlpha: 1,
+                    bgFill: mod.UIBgFill.None,
+                    children: [
+                      {
+                        name: "Text_MercScoreHeader_TeamName",
+                        type: "Text",
+                        position: [0, 0],
+                        size: [100, 50],
+                        anchor: mod.UIAnchor.CenterLeft,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        textLabel: mod.stringkeys.Text_MercScoreHeader_TeamName,
+                        textColor: [1, 1, 1],
+                        textAlpha: 1,
+                        textSize: 24,
+                        textAnchor: mod.UIAnchor.Center
+                      },
+                      {
+                        name: "Text_MearcScoreHeader_RoundConditionName",
+                        type: "Text",
+                        position: [0, 0],
+                        size: [100, 50],
+                        anchor: mod.UIAnchor.CenterRight,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        textLabel: mod.stringkeys.Text_MearcScoreHeader_RoundConditionName,
+                        textColor: [1, 0.9882, 0.6118],
+                        textAlpha: 1,
+                        textSize: 24,
+                        textAnchor: mod.UIAnchor.Center
+                      },
+                      {
+                        name: "Container_MercScoreHeader_Kills",
+                        type: "Container",
+                        position: [540, 0],
+                        size: [100, 50],
+                        anchor: mod.UIAnchor.TopLeft,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        children: [
+                          {
+                            name: "Text_MercScoreHeader_Kills",
+                            type: "Text",
+                            position: [0, 0],
+                            size: [100, 50],
+                            anchor: mod.UIAnchor.TopLeft,
+                            visible: true,
+                            padding: 0,
+                            bgColor: [0.2, 0.2, 0.2],
+                            bgAlpha: 1,
+                            bgFill: mod.UIBgFill.None,
+                            textLabel: mod.stringkeys.Text_MercScoreHeader_Kills,
+                            textColor: [1, 1, 1],
+                            textAlpha: 1,
+                            textSize: 24,
+                            textAnchor: mod.UIAnchor.Center
+                          }
+                        ]
+                      },
+                      {
+                        name: "Container_MercScoreHeader_Deaths",
+                        type: "Container",
+                        position: [640, 0],
+                        size: [100, 50],
+                        anchor: mod.UIAnchor.TopLeft,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        children: [
+                          {
+                            name: "Text_MercScoreHeader_Deaths",
+                            type: "Text",
+                            position: [0, 0],
+                            size: [100, 50],
+                            anchor: mod.UIAnchor.TopLeft,
+                            visible: true,
+                            padding: 0,
+                            bgColor: [0.2, 0.2, 0.2],
+                            bgAlpha: 1,
+                            bgFill: mod.UIBgFill.None,
+                            textLabel: mod.stringkeys.Text_MercScoreHeader_Deaths,
+                            textColor: [1, 1, 1],
+                            textAlpha: 1,
+                            textSize: 24,
+                            textAnchor: mod.UIAnchor.Center
+                          }
+                        ]
+                      },
+                      {
+                        name: "Container_MercScoreHeader_Assists",
+                        type: "Container",
+                        position: [740, 0],
+                        size: [100, 50],
+                        anchor: mod.UIAnchor.TopLeft,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        children: [
+                          {
+                            name: "Text_MercScoreHeader_Assists",
+                            type: "Text",
+                            position: [0, 0],
+                            size: [100, 50],
+                            anchor: mod.UIAnchor.TopLeft,
+                            visible: true,
+                            padding: 0,
+                            bgColor: [0.2, 0.2, 0.2],
+                            bgAlpha: 1,
+                            bgFill: mod.UIBgFill.None,
+                            textLabel: mod.stringkeys.Text_MercScoreHeader_Assists,
+                            textColor: [1, 1, 1],
+                            textAlpha: 1,
+                            textSize: 24,
+                            textAnchor: mod.UIAnchor.Center
+                          }
+                        ]
+                      },
+                      {
+                        name: "Container_MercScoreHeader_Score",
+                        type: "Container",
+                        position: [440, 0],
+                        size: [100, 50],
+                        anchor: mod.UIAnchor.TopLeft,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        children: [
+                          {
+                            name: "Text_MercScoreHeader_Score",
+                            type: "Text",
+                            position: [0, 0],
+                            size: [100, 50],
+                            anchor: mod.UIAnchor.TopLeft,
+                            visible: true,
+                            padding: 0,
+                            bgColor: [0.2, 0.2, 0.2],
+                            bgAlpha: 1,
+                            bgFill: mod.UIBgFill.None,
+                            textLabel: mod.stringkeys.Text_MercScoreHeader_Score,
+                            textColor: [1, 1, 1],
+                            textAlpha: 1,
+                            textSize: 24,
+                            textAnchor: mod.UIAnchor.Center
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    name: "Container_MainBody_SealScores",
+                    type: "Container",
+                    position: [-470, 250],
+                    size: [940, 790],
+                    anchor: mod.UIAnchor.TopCenter,
+                    visible: true,
+                    padding: 0,
+                    bgColor: [0.2, 0.2, 0.2],
+                    bgAlpha: 0.3,
+                    bgFill: mod.UIBgFill.GradientTop,
+                    children: [
+                      {
+                        name: "Container_MainBody_SealScore_Outline",
+                        type: "Container",
+                        position: [0, 0],
+                        size: [940, 790],
+                        anchor: mod.UIAnchor.TopLeft,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [1, 1, 1],
+                        bgAlpha: 0.5,
+                        bgFill: mod.UIBgFill.OutlineThin
+                      }
+                    ]
+                  },
+                  {
+                    name: "Container_MainBody_MercScores",
+                    type: "Container",
+                    position: [470, 250],
+                    size: [940, 790],
+                    anchor: mod.UIAnchor.TopCenter,
+                    visible: true,
+                    padding: 0,
+                    bgColor: [0.2, 0.2, 0.2],
+                    bgAlpha: 0.3,
+                    bgFill: mod.UIBgFill.GradientTop,
+                    children: [
+                      {
+                        name: "Container_MainBody_MercScore_Outline",
+                        type: "Container",
+                        position: [0, 0],
+                        size: [940, 790],
+                        anchor: mod.UIAnchor.TopLeft,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [1, 1, 1],
+                        bgAlpha: 0.5,
+                        bgFill: mod.UIBgFill.OutlineThin
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        );
+
+        static roundText: mod.UIWidget | undefined;
+        static timerText: mod.UIWidget | undefined;
+        static sealConditionText: mod.UIWidget | undefined;
+        static mercConditionText: mod.UIWidget | undefined;
+
+
+        // 
+        private constructor() {}
+
+        // Initialize the widget
+        static init(): void {
+            ScoreboardWidget.ShowWidget(false);
+
+            this.roundText = mod.FindUIWidgetWithName("Text_MainBody_RoundNumber");
+            this.timerText = mod.FindUIWidgetWithName("Text_ScoreboardTimer");
+            this.sealConditionText = mod.FindUIWidgetWithName("Text_SealScoreHeader_RoundConditionName");
+            this.mercConditionText = mod.FindUIWidgetWithName("Text_MercScoreHeader_RoundConditionName");
+        }
+
+        // Update the widget
+        static async render(time: number): Promise<void> {
+            // generate scoreboard content
+
+
+            // set round number text
+            if (this.roundText)
+                mod.SetUITextLabel(this.roundText, mod.Message(mod.stringkeys.Text_MainBody_RoundNumber, SOCOM.CZMatchData.roundNum));
+
+            // set timer text
+            if (this.timerText)
+                mod.SetUITextLabel(this.timerText, mod.Message(""));
+
+            // set seals round condition texts
+            if (this.sealConditionText)
+                mod.SetUITextLabel(this.sealConditionText, mod.Message(mod.stringkeys.Text_SealScoreHeader_RoundConditionName, SOCOM.CZMatchData.currentRoundWinner == 1 ? "WINNER" : "LOSER"));
+
+            // set mercs round condition text
+            if (this.mercConditionText)
+                mod.SetUITextLabel(this.mercConditionText, mod.Message(mod.stringkeys.Text_MercScoreHeader_RoundConditionName, SOCOM.CZMatchData.currentRoundWinner == 2 ? "WINNER" : "LOSER"));
+
+            // show the scoreboard for a duration and then hide it
+            this.ShowWidget(true);
+            await mod.Wait(time);
+            this.ShowWidget(false);
+        }
+
+        // Show/hide the score widget
+        static ShowWidget(visible: boolean): void {
+            if (this.widget) {
+                mod.SetUIWidgetVisible(this.widget, visible);
+            }
+        }
+    }
+
+    export class ScoreEntryWidget
+    {
+        OriginWidget: mod.UIWidget | undefined;
+        seal: SOCOM.CZSeal;
+    }
 
 }
 
