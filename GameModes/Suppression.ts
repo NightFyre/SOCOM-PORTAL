@@ -35,6 +35,7 @@
     }
 
 findModFunction("SetCameraTargetForPlayer")(eventPlayer, eventOtherPlayer)
+(mod as any)?.SetCameraTargetForPlayer?.(player, randomPlayer);
 
 */
 import * as modlib from '../PortalSDK/code/modlib'; // for local testing
