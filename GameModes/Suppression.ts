@@ -25,7 +25,7 @@
 
     @TODO: restrict parachute use
 */
-import * as modlib from '../PortalSDK/code/modlib'; // for local testing
+import * as modlib from '../PortalSDK/code/modlib'; // for local editing
 // import * as modlib from 'modlib'; // required on server side
 
 // FLAGS FOR DEBUGGING
@@ -329,8 +329,12 @@ export namespace SOCOM
             /* get zoom state */
             let isCurrentlyZooming = mod.GetSoldierState(player, mod.SoldierStateBool.IsZooming);
             if (isCurrentlyZooming !== this.isZooming)
+            {
+                if (this.sealPlayer.inputDetector.dtcInput(player, isCurrentlyZooming))
+                    this.switchShoulderView();
                 bShouldUpdateCameraView = true;
-            
+            }
+
             /* early exit if no update needed */
             if (!bShouldUpdateCameraView)
                 return;
@@ -973,7 +977,6 @@ export namespace SOCOM
                 killerSeal.stats.friendlyFireKills[0]++; // increment friendly fire kills count
                 this.stats.friendlyFireDeaths[0]++; // increment friendly fire deaths count
                 console.log(`[CZSeal::OnPlayerDied] Player ${killerSeal.playerID} team killed friendly Player ${this.playerID}`);
-                mod.DisplayNotificationMessage(mod.Message("FRIENDLY FIRE WILL NOT BE TOLERATED"), killerSeal.player);
 
                 /* HANDLE EXCESSIVE FRIENDLY FIRE */
                 let totalFriendlyFireKills = killerSeal.stats.friendlyFireKills[0] + killerSeal.stats.friendlyFireKills[1];
@@ -981,10 +984,12 @@ export namespace SOCOM
                 {
                     mod.Kill(killerSeal.player); // kill the killer for excessive friendly fire
                     console.log(`[CZSeal::OnPlayerDied] Player ${killerSeal.playerID} has been removed from the round for excessive friendly fire`);
-                    log.info(mod.Message("{} removed from play due to excessive friendly fire", killerSeal.player));
+                    log.warning(mod.Message("{} removed from play due to excessive friendly fire", killerSeal.player));
                     mod.DisplayNotificationMessage(mod.Message("FRIENDLY FIRE: YOU HAVE BEEN REMOVED FROM PLAY"), killerSeal.player);
+                    return;
                 }
-
+                
+                mod.DisplayNotificationMessage(mod.Message("FRIENDLY FIRE WILL NOT BE TOLERATED"), killerSeal.player);
                 return;
             }
 
@@ -1192,7 +1197,6 @@ export namespace SOCOM
         static roundTime: number = 0; // time left for the current round in seconds
         static roundTimeMax: number = 240; // max round time in seconds ( 4 minutes )
         static scores: number[] = [0, 0]; // rounds won [team1, team2]
-        static currentRoundWinner: number = 0; // team ID of the current round winner (0 = no winner yet)
 
         private constructor() {}
 
@@ -1212,7 +1216,6 @@ export namespace SOCOM
             CZMatchData.roundMax = 11;
             CZMatchData.roundTime = 0;
             CZMatchData.roundTimeMax = 240;
-            CZMatchData.currentRoundWinner = 0;
             CZMatchData.matchTime = 0;
             CZMatchData.players = 0;
             CZMatchData.bots = 0;
@@ -1313,7 +1316,7 @@ export namespace SOCOM
         }
 
         /* ends the match and displays final scores */
-        static  async endMatch(): Promise<void>
+        static  async endMatch(winner: number): Promise<void>
         {
             mod.DisplayNotificationMessage(mod.Message("FINAL SCORE: {} - {}", CZMatchData.scores[0], CZMatchData.scores[1]));
             CZMatchData.state = GameState.MatchEnd;
@@ -1348,7 +1351,7 @@ export namespace SOCOM
             }
             //  log.info(mod.Message("MERCS Rounds Won: {}", CZMatchData.scores[1]));
 
-            await UI.ScoreboardWidget.render(15); // display scoreboard for 15 seconds
+            await UI.ScoreboardWidget.renderScoreboard(winner, true, 20); // display scoreboard for 20 seconds
             // await mod.Wait(15); // wait 15 seconds before resetting the match
 
             let host = CZMatchData.getHostPlayer();
@@ -1362,7 +1365,6 @@ export namespace SOCOM
             console.log(`[CZMatchData::preRound] Preparing for Round ${CZMatchData.roundNum + 1}`);
          
             CZMatchData.state = GameState.PreRound; // transition to pre-round state
-            CZMatchData.currentRoundWinner = 0;
 
             mod.SetSpawnMode(mod.SpawnModes.AutoSpawn); // force auto spawn
             mod.EnableAllPlayerDeploy(true); // enable deploy for all players
@@ -1400,7 +1402,7 @@ export namespace SOCOM
                 mod.EnableWorldIconText(seal.teamIcon, true);
             }
 
-            CZMatchData.startRound(); // start a new round
+            //  CZMatchData.startRound(); // start a new round
 
             /* add bots if player count is low (only count human players) */
             let humanPlayers = CZMatchData.players - CZMatchData.bots;
@@ -1450,6 +1452,8 @@ export namespace SOCOM
                 console.log(`[CZMatchData::preRound] Bot spawning complete. Total players: ${CZMatchData.players}, Bots: ${CZMatchData.bots}`);
             }
 
+            CZMatchData.startRound(); // start a new round
+
             mod.SetSpawnMode(mod.SpawnModes.Deploy); // restore normal spawn mode
 
             // await mod.Wait(5); // wait a few seconds before starting the round
@@ -1487,19 +1491,22 @@ export namespace SOCOM
         static  async endRound(winner: number): Promise<void>
         {
             CZMatchData.state = GameState.RoundEnd;
-            CZMatchData.currentRoundWinner = winner;
 
-            mod.EnableAllPlayerDeploy(false); // disable redeployment for all players
+            //  mod.EnableAllPlayerDeploy(false); // disable redeployment for all players
 
             // Update scores
             if (winner)
             {
                 CZMatchData.scores[winner - 1]++;
-                mod.DisplayNotificationMessage(mod.Message("{} WIN ROUND {}", CZMatchData.getTeamName(winner - 1), CZMatchData.roundNum));
+                UI.ScoreboardWidget.renderRoundEndNotification(winner, 6); // display round end notification for 6 seconds like a notification
+                //  mod.DisplayNotificationMessage(mod.Message("{} WIN ROUND {}", CZMatchData.getTeamName(winner - 1), CZMatchData.roundNum));
             }
             else
-                mod.DisplayNotificationMessage(mod.Message("ROUND {} ENDED IN A DRAW", CZMatchData.roundNum));
-
+            {
+                // mod.DisplayNotificationMessage(mod.Message("ROUND {} ENDED IN A DRAW", CZMatchData.roundNum));
+                UI.ScoreboardWidget.renderRoundEndNotification(0, 6); // display round end notification for 6 seconds like a notification
+            }
+            
             await mod.Wait(8); // wait a few seconds before performing end round logic ( allow players to perform end of round actions such as dancing , emotes , etc. )
 
 
@@ -1528,6 +1535,7 @@ export namespace SOCOM
                 }
                 else
                 {
+                    mod.DeployPlayer(seal.player); // redeploy human players to allow spectating
                     await seal.SetSpectatorMode(false);
                     seal.SetInputMode(true);
                 }
@@ -1554,10 +1562,12 @@ export namespace SOCOM
                 }
                 else
                 {
+                    mod.DeployPlayer(seal.player); // redeploy human players to allow spectating
                     await seal.SetSpectatorMode(false);
                     seal.SetInputMode(true);
                 }
             }
+            mod.EnableAllPlayerDeploy(false); // disable redeployment for all players
 
             /* update team counts by removing all bots */
             for (let botID of botsToRemove) {
@@ -1582,12 +1592,12 @@ export namespace SOCOM
             /* Check for match end */
             // @TODO: implement overtime rounds for ties at max score
             if (CZMatchData.scores[0] >= 6 || CZMatchData.scores[1] >= 6 || CZMatchData.roundNum >= CZMatchData.roundMax)
-                await CZMatchData.endMatch();
+                await CZMatchData.endMatch(winner);
             else
             {
                 // @TODO: display scoreboard ui
                 mod.DisplayNotificationMessage(mod.Message("PREPARING FOR THE NEXT ROUND"));
-                await UI.ScoreboardWidget.render(7); // display scoreboard for 7 seconds
+                await UI.ScoreboardWidget.renderScoreboard(winner, false, 10); // display scoreboard for 10 seconds
                 //  await mod.Wait(7); // wait a few seconds before preparing for the next round
                 await CZMatchData.preRound(); // prepare for the next round
             }
@@ -1647,7 +1657,8 @@ export namespace SOCOM
 
             /* log event */
             console.log(`[CZMatchData::OnPlayerLeft] Player Left: ID: ${seal.playerID} | TeamID: ${seal.teamID}`);
-            log.info(mod.Message("{} left the game", seal.player));
+            if (!seal.isAI)
+                log.info(mod.Message("{} left the game", seal.player));
 
             /* remove player */
             CZSeal.remove(eventNumber);
@@ -3125,7 +3136,7 @@ export namespace UI {
     export class ScoreboardWidget
     {
         // 
-        static widget = modlib.ParseUI(
+        static scoreWidget = modlib.ParseUI(
           {
             name: "Container_ScoreboardMain",
             type: "Container",
@@ -3178,14 +3189,14 @@ export namespace UI {
                         name: "Text_MainBody_RoundNumber",
                         type: "Text",
                         position: [0, 0],
-                        size: [600, 200],
+                        size: [1550, 200],
                         anchor: mod.UIAnchor.Center,
                         visible: true,
                         padding: 0,
                         bgColor: [0.2, 0.2, 0.2],
                         bgAlpha: 1,
                         bgFill: mod.UIBgFill.None,
-                        textLabel: mod.stringkeys.Text_MainBody_RoundNumber,
+                        textLabel: "ROUND {}",
                         textColor: [1, 1, 1],
                         textAlpha: 0.8,
                         textSize: 90,
@@ -3202,7 +3213,7 @@ export namespace UI {
                         bgColor: [0.2, 0.2, 0.2],
                         bgAlpha: 1,
                         bgFill: mod.UIBgFill.None,
-                        textLabel: mod.stringkeys.Text_ScoreboardTimer,
+                        textLabel: "next round: {}s",
                         textColor: [1, 1, 1],
                         textAlpha: 0.8,
                         textSize: 24,
@@ -3233,7 +3244,7 @@ export namespace UI {
                         bgColor: [0.2, 0.2, 0.2],
                         bgAlpha: 1,
                         bgFill: mod.UIBgFill.None,
-                        textLabel: mod.stringkeys.Text_SealScoreHeader_TeamName,
+                        textLabel: "SEALS",
                         textColor: [1, 1, 1],
                         textAlpha: 1,
                         textSize: 24,
@@ -3250,7 +3261,7 @@ export namespace UI {
                         bgColor: [0.2, 0.2, 0.2],
                         bgAlpha: 1,
                         bgFill: mod.UIBgFill.None,
-                        textLabel: mod.stringkeys.Text_SealScoreHeader_RoundConditionName,
+                        textLabel: "WINNER",
                         textColor: [1, 0.9882, 0.6118],
                         textAlpha: 1,
                         textSize: 24,
@@ -3412,7 +3423,7 @@ export namespace UI {
                         textAnchor: mod.UIAnchor.Center
                       },
                       {
-                        name: "Text_MearcScoreHeader_RoundConditionName",
+                        name: "Text_MercScoreHeader_RoundConditionName",
                         type: "Text",
                         position: [0, 0],
                         size: [100, 50],
@@ -3422,7 +3433,7 @@ export namespace UI {
                         bgColor: [0.2, 0.2, 0.2],
                         bgAlpha: 1,
                         bgFill: mod.UIBgFill.None,
-                        textLabel: mod.stringkeys.Text_MearcScoreHeader_RoundConditionName,
+                        textLabel: "WINNER",
                         textColor: [1, 0.9882, 0.6118],
                         textAlpha: 1,
                         textSize: 24,
@@ -3612,33 +3623,105 @@ export namespace UI {
           }
         );
 
+        static containerVictoryWidget = modlib.ParseUI(
+          {
+            name: "Container_Victory",
+            type: "Container",
+            position: [0, 250],
+            size: [600, 100],
+            anchor: mod.UIAnchor.TopCenter,
+            visible: true,
+            padding: 0,
+            bgColor: [0.0745, 0.1843, 0.2471],
+            bgAlpha: 0.8,
+            bgFill: mod.UIBgFill.GradientTop,
+            children: [
+              {
+                name: "Text_Victory",
+                type: "Text",
+                position: [0, 0],
+                size: [600, 100],
+                anchor: mod.UIAnchor.Center,
+                visible: true,
+                padding: 0,
+                bgColor: [0.2, 0.2, 0.2],
+                bgAlpha: 0,
+                bgFill: mod.UIBgFill.None,
+                textLabel: "{} WIN ROUND {}",
+                textColor: [1, 1, 1],
+                textAlpha: 0.8,
+                textSize: 52,
+                textAnchor: mod.UIAnchor.Center
+              },
+              {
+                name: "Container_Victory_Outline",
+                type: "Container",
+                position: [0, 0],
+                size: [600, 100],
+                anchor: mod.UIAnchor.TopLeft,
+                visible: true,
+                padding: 0,
+                bgColor: [1, 0.9882, 0.6118],
+                bgAlpha: 0.5,
+                bgFill: mod.UIBgFill.OutlineThin
+              }
+            ]
+          }
+        );
+
+        // score ui widgets
         static roundText: mod.UIWidget | undefined;
         static timerText: mod.UIWidget | undefined;
         static sealConditionText: mod.UIWidget | undefined;
         static mercConditionText: mod.UIWidget | undefined;
 
-
         // 
+        static roundResultText: mod.UIWidget | undefined; // end of round result text before the scoreboard is presented
+
+        //
         private constructor() {}
 
-        // Initialize the widget
+        // Initialize Scoreboard UI widgets
         static init(): void {
-            ScoreboardWidget.ShowWidget(false);
 
+            // SCORE WIDGET
+            ScoreboardWidget.ShowScoreWidget(false);
             this.roundText = mod.FindUIWidgetWithName("Text_MainBody_RoundNumber");
             this.timerText = mod.FindUIWidgetWithName("Text_ScoreboardTimer");
             this.sealConditionText = mod.FindUIWidgetWithName("Text_SealScoreHeader_RoundConditionName");
             this.mercConditionText = mod.FindUIWidgetWithName("Text_MercScoreHeader_RoundConditionName");
+        
+            // ROUND WIDGET
+            ScoreboardWidget.ShowRoundWidget(false);
+            this.roundResultText = mod.FindUIWidgetWithName("Text_Victory");
+
         }
 
-        // Update the widget
-        static async render(time: number): Promise<void> {
-            // generate scoreboard content
-
+        // Show the scoreboard with round results
+        static async renderScoreboard(winner: number, isEnd: boolean, time: number): Promise<void> {
+            // "x WIN ROUND x" or "x WIN" or "ROUND x ENDED IN A DRAW"
+            // winner = team ID of the winner (1 = seals, 2 = mercs, 0 = no winner)
+            let roundText = isEnd ? (mod.stringkeys.sb_matchEnd) : winner == 0 ? mod.stringkeys.sb_drawRound : mod.stringkeys.sb_roundWin;
+            let sealText = isEnd ? (mod.stringkeys.sb_empty) : winner == 1 ? mod.stringkeys.sb_winner : mod.stringkeys.sb_empty;
+            let mercText = isEnd ? (mod.stringkeys.sb_empty) : winner == 2 ? mod.stringkeys.sb_winner : mod.stringkeys.sb_empty;
 
             // set round number text
             if (this.roundText)
-                mod.SetUITextLabel(this.roundText, mod.Message(mod.stringkeys.Text_MainBody_RoundNumber, SOCOM.CZMatchData.roundNum));
+            {
+                switch (winner)
+                {
+                    case 0:
+                        mod.SetUITextLabel(this.roundText, mod.Message(roundText, SOCOM.CZMatchData.roundNum)); // ROUND x ENDED IN A DRAW
+                        break;
+                    case 1:
+                        mod.SetUITextLabel(this.roundText, mod.Message(roundText, SOCOM.CZMatchData.getTeamName(winner - 1), SOCOM.CZMatchData.roundNum)); // SEALS WIN ROUND x
+                        break;
+                    case 2:
+                        mod.SetUITextLabel(this.roundText, mod.Message(roundText, SOCOM.CZMatchData.getTeamName(winner - 1), SOCOM.CZMatchData.roundNum)); // MERCS WIN ROUND x
+                        break;
+                    default: return; // error
+                }
+            }
 
             // set timer text
             if (this.timerText)
@@ -3646,22 +3729,63 @@ export namespace UI {
 
             // set seals round condition texts
             if (this.sealConditionText)
-                mod.SetUITextLabel(this.sealConditionText, mod.Message(mod.stringkeys.Text_SealScoreHeader_RoundConditionName, SOCOM.CZMatchData.currentRoundWinner == 1 ? "WINNER" : "LOSER"));
+                mod.SetUITextLabel(this.sealConditionText, mod.Message(sealText));
 
             // set mercs round condition text
             if (this.mercConditionText)
-                mod.SetUITextLabel(this.mercConditionText, mod.Message(mod.stringkeys.Text_MercScoreHeader_RoundConditionName, SOCOM.CZMatchData.currentRoundWinner == 2 ? "WINNER" : "LOSER"));
+                mod.SetUITextLabel(this.mercConditionText, mod.Message(mercText));
 
             // show the scoreboard for a duration and then hide it
-            this.ShowWidget(true);
+            this.ShowScoreWidget(true);
+
             await mod.Wait(time);
-            this.ShowWidget(false);
+            
+            this.ShowScoreWidget(false);
         }
 
+        // Show the round end notification
+        static async renderRoundEndNotification(winner: number, time: number): Promise<void> 
+        {
+            /* @TODO: repeated code from above - refactor later */
+            {
+                // Show victory container
+                let roundResultText = winner == 0 ? mod.stringkeys.sb_drawRound : mod.stringkeys.sb_roundWin; // "ROUND x ENDED IN A DRAW" or "x WIN ROUND x"
+
+                if (this.roundResultText)
+                {
+                    switch (winner)
+                    {
+                        case 0:
+                            mod.SetUITextLabel(this.roundResultText, mod.Message(roundResultText, SOCOM.CZMatchData.roundNum)); // ROUND x ENDED IN A DRAW
+                            break;
+                        case 1:
+                            mod.SetUITextLabel(this.roundResultText, mod.Message(roundResultText, SOCOM.CZMatchData.getTeamName(winner - 1), SOCOM.CZMatchData.roundNum)); // SEALS WIN ROUND x
+                            break;
+                        case 2:
+                            mod.SetUITextLabel(this.roundResultText, mod.Message(roundResultText, SOCOM.CZMatchData.getTeamName(winner - 1), SOCOM.CZMatchData.roundNum)); // MERCS WIN ROUND x
+                            break;
+                        default: return; // error
+                    }
+                }
+            }
+
+            this.ShowRoundWidget(true);
+            
+            await mod.Wait(time);
+
+            this.ShowRoundWidget(false);
+        } 
+
         // Show/hide the score widget
-        static ShowWidget(visible: boolean): void {
-            if (this.widget) {
-                mod.SetUIWidgetVisible(this.widget, visible);
+        static ShowScoreWidget(visible: boolean): void {
+            if (this.scoreWidget) {
+                mod.SetUIWidgetVisible(this.scoreWidget, visible);
+            }
+        }
+
+        static ShowRoundWidget(visible: boolean): void {
+            if (this.containerVictoryWidget) {
+                mod.SetUIWidgetVisible(this.containerVictoryWidget, visible);
             }
         }
     }
@@ -3669,7 +3793,7 @@ export namespace UI {
     export class ScoreEntryWidget
     {
         OriginWidget: mod.UIWidget | undefined;
-        seal: SOCOM.CZSeal;
+        //  seal: SOCOM.CZSeal;
     }
 
 }
