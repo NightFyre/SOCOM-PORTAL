@@ -267,8 +267,6 @@ export function OnPlayerUIButtonEvent(player: mod.Player, widget: any, event: an
     seal.spectateCamera?.onUIButtonEvent(widget, event);
 }
 
-
-
 export namespace SOCOM
 {
 
