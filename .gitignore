@@ -11,6 +11,7 @@ release/
 *.so
 
 # exclude personal settings
+*.vs
 *.user
 *.suo
 *.log
