@@ -122,8 +122,7 @@ void SocomHelper()
 
     /* RENDER */
 
-    static int scalar = 11;
-    static const char* items[] = { "1", "2", "3", "4", "5" , "6" , "7" , "8" , "9" , "10" , "11" , "12" , "13" , "14" , "15" , "16" , "17", "18", "19", "20" };
+    static float scalar = 12.f;
 
     {
 
@@ -140,15 +139,14 @@ void SocomHelper()
         {
             if (origins.size() > 0)
             {
-                const auto factor = scalar + 1;
 
                 system("CLS");
-                printf("[+] dumping list of positions => (size=%d|scale=%d).\n", origins.size(), factor);
+                printf("[+] dumping list of positions => (size=%d|scale=%.0f).\n", origins.size(), scalar);
                 for (int i = 0; i < origins.size(); i++)
                 {
                     const auto count = i + 1;
 
-                    const auto origin = origins[i] / factor; // apply scaling factor to origin
+                    const auto origin = origins[i] / scalar; // apply scaling factor to origin
 
                     printf("[%d] %.2f , %.2f , %.2f\n", count, origin.x, origin.y, origin.z);
                 }
@@ -159,7 +157,9 @@ void SocomHelper()
         ImGui::SameLine();
 
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        ImGui::Combo("##SCALE", &scalar, items, IM_ARRAYSIZE(items));
+        ImGui::SliderFloat("##SCALE", &scalar, 1.f, 20.f, "%.0f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("\'CTRL + CLICK\' to set custom input");
 
         ImGui::Separator();
         if (ImGui::Button("CLEAR SAVED POSITIONS", ImVec2(ImGui::GetContentRegionAvail().x, ImGui::GetTextLineHeightWithSpacing())))
