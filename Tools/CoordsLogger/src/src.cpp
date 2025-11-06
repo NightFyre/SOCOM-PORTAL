@@ -103,6 +103,10 @@ void SocomHelper()
 {
     static pcsx2Memory mem = pcsx2Memory();	//	attach to pcsx2 "pcsx2-qt.exe
     static std::vector<VEC3_T> origins;
+    static bool bSupportCA{ false };
+    ImGui::Checkbox("SOCOM CA", &bSupportCA);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("enable this if using SOCOM CA");
 
     auto pInfo = mem.psxGetInfo();		//	gets pcsx2 process information
     if (!pInfo.bAttached)				//	check if attached
@@ -113,20 +117,50 @@ void SocomHelper()
     }
 
     /* Get Local Player */
-    const auto pSEAL = mem.psxRead<unsigned __int32>(pLocalSeal);
+    const auto pSEAL = mem.psxRead<unsigned __int32>(bSupportCA ? pLocalSeal.second : pLocalSeal.first);
     if (pSEAL == 0)
     {
-        if (mem.psxRead<unsigned __int8>(iForceStart) == 1) // user is in a lobby and waiting for players to ready up
+        /* VARIABLES FOR DIFFERENT GAMES */
+        auto addr = bSupportCA ? iForceStart.second : iForceStart.first;
+        auto cmp = bSupportCA ? iForceStart_original.second : iForceStart_original.first;
+        auto new_value = bSupportCA ? iForceStart_patch.second : iForceStart_patch.first;
+
+        /* FORCE START */
+        bool bPlayerInLobby{ false };
+        static bool bReadyPatch{ false };
+        static int ReadyTick = 0;
+
+        /* this sucks . . . everything was so clean */
+        if (bSupportCA && mem.psxRead<unsigned __int8>(addr) == cmp)
+            bPlayerInLobby = true;
+        else if (!bSupportCA && mem.psxRead<unsigned __int32>(addr) == cmp)
+            bPlayerInLobby = true;
+
+        if (bPlayerInLobby) // user is in a lobby and waiting for players to ready up
         {
             ImGui::TextColored(ImVec4(1, 1, 0, 1), "PLAYER IN LOBBY");
             if (ImGui::Button("ENABLE FORCE START ( LAN )"))
             {
-                mem.psxWrite(iForceStart, 2); // force starts the match
+                mem.psxWrite(addr, new_value); // force starts the match
                 printf("[+] patched bytes to force start the match.\n");
+                if (!bSupportCA)
+                {
+                    bReadyPatch = true; // set flag to patch ready function to its original state 
+                    ReadyTick = GetTickCount64();
+                }
             }
         }
         else
             ImGui::TextColored(ImVec4(1, 1, 0, 1), "WAITING FOR LOBBYSTATE OR LOCAL PLAYER");
+
+        /* restore bytes for socom 2 force start */
+        if (bReadyPatch && !bSupportCA && ((GetTickCount64() - ReadyTick) > 5 * 1000))
+        {
+            bReadyPatch = false;
+            mem.psxWrite<unsigned __int32>(addr, cmp); // restore patches bytes so we can force start sometime later
+            ReadyTick = GetTickCount64();
+            printf("restored patched bytes.\n");
+        }
         
         return;
     }
@@ -136,7 +170,6 @@ void SocomHelper()
 
     /* RENDER */
     static float scalar = 12.f;
-
     {
         if (ImGui::Button("ADD POSITION TO LIST"))
         {

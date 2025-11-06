@@ -85,10 +85,9 @@ static_assert(sizeof(_CZ_SEAL) == 0xDC);
 /* pointer to local player object 
 	type: CZSEAL_T
 */
-static constexpr unsigned __int32 pLocalSeal = 0x709D98;
+static constexpr std::pair<unsigned __int32, unsigned __int32> pLocalSeal = { 0x44D648, 0x709D98 };
 
-/* instruction which can be manipulated to force start the match
- original bytes: 0x1
- patch bytes:   0x2
-*/
-static constexpr unsigned __int32 iForceStart = 0xA7675C;
+/* instruction which can be manipulated to force start the match */
+static constexpr std::pair<unsigned __int32, unsigned __int32> iForceStart = { 0x408868, 0xA7675C };
+static constexpr std::pair<unsigned __int32, unsigned __int32> iForceStart_original = { 0x0027DD00, 0x1 };
+static constexpr std::pair<unsigned __int32, unsigned __int32> iForceStart_patch = { 0x0027E280, 0x2 };
