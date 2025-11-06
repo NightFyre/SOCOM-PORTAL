@@ -88,7 +88,7 @@ static_assert(sizeof(_CZ_SEAL) == 0xDC);
 static constexpr unsigned __int32 pLocalSeal = 0x709D98;
 
 /* instruction which can be manipulated to force start the match
- original bytes: 0x00B54984
- patch bytes:   0x00000002
+ original bytes: 0x1
+ patch bytes:   0x2
 */
 static constexpr unsigned __int32 iForceStart = 0xA7675C;

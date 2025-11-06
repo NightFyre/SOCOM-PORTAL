@@ -107,7 +107,7 @@ void SocomHelper()
     auto pInfo = mem.psxGetInfo();		//	gets pcsx2 process information
     if (!pInfo.bAttached)				//	check if attached
     {
-        printf("PCSX2 Process not found. Retrying...\n");
+        ImGui::TextColored(ImVec4(1, 1, 0, 1), "PCSX2 PROCESS NOT FOUND");
 		mem = pcsx2Memory(); // attempt to reattach to pcsx2 process
         return;
     }
@@ -115,18 +115,29 @@ void SocomHelper()
     /* Get Local Player */
     const auto pSEAL = mem.psxRead<unsigned __int32>(pLocalSeal);
     if (pSEAL == 0)
+    {
+        if (mem.psxRead<unsigned __int8>(iForceStart) == 1) // user is in a lobby and waiting for players to ready up
+        {
+            ImGui::TextColored(ImVec4(1, 1, 0, 1), "PLAYER IN LOBBY");
+            if (ImGui::Button("ENABLE FORCE START ( LAN )"))
+            {
+                mem.psxWrite(iForceStart, 2); // force starts the match
+                printf("[+] patched bytes to force start the match.\n");
+            }
+        }
+        else
+            ImGui::TextColored(ImVec4(1, 1, 0, 1), "WAITING FOR LOBBYSTATE OR LOCAL PLAYER");
+        
         return;
-    
+    }
+
     /* GET SEAL OBJECT */
     const auto& SEAL = mem.psxRead<CZSEAL_T>(pSEAL);
 
     /* RENDER */
-
     static float scalar = 12.f;
 
     {
-
-
         if (ImGui::Button("ADD POSITION TO LIST"))
         {
             origins.push_back(SEAL.mOrigin);
@@ -139,7 +150,6 @@ void SocomHelper()
         {
             if (origins.size() > 0)
             {
-
                 system("CLS");
                 printf("[+] dumping list of positions => (size=%d|scale=%.0f).\n", origins.size(), scalar);
                 for (int i = 0; i < origins.size(); i++)
