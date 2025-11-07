@@ -2,7 +2,7 @@
 extends Button
 
 # location of the file
-@export var coordinate_file: String = "res://addons/socom_coordinates_importer/coordinates.csv"
+@export var coordinate_file: String = "res://addons/SOCOMimporter/coordinates.csv"
 
 # fire event
 func _enter_tree():
@@ -50,10 +50,23 @@ func clicked():
 	print("[+][SiB] finished.")
 
 func spawnObject(node: Node, name_: String, pos: Vector3):
-	var instance = HighwaySignPole_01.new()
-	HighwaySignPole_01
+	# Create a MeshInstance3D node with a visible mesh
+	var instance = MeshInstance3D.new()
+	
+	# Create a simple box mesh as a marker
+	var box_mesh = BoxMesh.new()
+	box_mesh.size = Vector3(2.0, 2.0, 2.0)  # 2x2x2 unit box
+	instance.mesh = box_mesh
+	
+	# Create a basic material to make it more visible
+	var material = StandardMaterial3D.new()
+	material.albedo_color = Color.RED  # Make it red so it's easily visible
+	material.emission_enabled = true
+	material.emission = Color.RED * 0.3  # Add slight glow
+	instance.material_override = material
+	
+	# Add to scene
 	node.add_child(instance)
 	instance.name = name_
 	instance.position = pos
 	instance.owner = node
-	instance.scene_file_path = ""
