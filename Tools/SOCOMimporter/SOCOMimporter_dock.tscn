@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://b8x0av05gemuf"]
 
-[ext_resource type="Script" uid="uid://dsvmb8sj4bcco" path="res://addons/socom_coordinates_importer/importer_button.gd" id="1_nh5o8"]
+[ext_resource type="Script" uid="uid://dsvmb8sj4bcco" path="res://addons/SOCOMimporter/importer_button.gd" id="1_nh5o8"]
 
 [node name="SOCOMimporter" type="Button"]
 offset_right = 8.0
