@@ -820,10 +820,10 @@ export namespace SOCOM
         lastAIPathUpdateTime: number = 0;
         private updateAIPath() : void
         {
-            if (!this.isSealAlive() || !this.isAI)
+            if (BOTS_IDLE)
                 return;
 
-            if (BOTS_IDLE)
+            if (!this.isSealAlive() || !this.isAI)
                 return;
 
             let currentTime = mod.GetMatchTimeElapsed();
@@ -880,6 +880,13 @@ export namespace SOCOM
             let newHealth = mod.GetSoldierState(this.player, mod.SoldierStateNumber.CurrentHealth);
             let damageReceived = this.currentHealth - newHealth;
             this.currentHealth = newHealth; // sync current health
+            if ( this.currentHealth < 30 )
+            {
+                mod.Heal(this.player, 30 - this.currentHealth); // auto-heal to 35 health
+                this.currentHealth = 30; // update current health
+                console.log(`[CZSeal::OnPlayerDamaged] Player ${this.playerID} auto-healed to 30 health`);
+            }
+            this.__updateScoreboardEntry(); // update scoreboard entry
 
             let shooter = CZSeal.get(eventOtherPlayer, undefined);
             if (!shooter || !shooter.isAlive) // shooter is not alive , ignore
@@ -1166,7 +1173,7 @@ export namespace SOCOM
                 this.stats.kills[1] + this.stats.kills[0],
                 this.stats.deaths[1] + this.stats.deaths[0],
                 this.stats.assists[1] + this.stats.assists[0],
-                this.isAlive ? 1 : 0
+                this.isAlive ? this.currentHealth : 0
             );
         }
     }
