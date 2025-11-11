@@ -48,7 +48,52 @@ const MAX_PLAYERS = 32;
 const MAX_PLAYERS_PER_TEAM = MAX_PLAYERS / 2;
 const END_ROUND_ON_LAST_ELIMINATED_PLAYER = true; // whether to end the round when the last player on a team is eliminated when bots are backfilling empty player slots
 const BOTS_IDLE = false; // whether bots should remain idle and not engage in combat
+const ALLOW_ADS = false; // whether players are allowed to aim down sights
+const DEFAULT_LOADOUTS = true; // whether to give players default loadouts on spawn
 
+
+
+// SEAL LOADOUTS
+let sealM4A1Package_loud = mod.CreateNewWeaponPackage();
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Muzzle_Compensated_Brake, sealM4A1Package_loud); // Compensated Brake
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Barrel_125_Fluted, sealM4A1Package_loud); // 12.5" fluted barrel
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Top_5_mW_Red, sealM4A1Package_loud); // 5mW Red Laser
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Bottom_Ribbed_Vertical, sealM4A1Package_loud); // Ribbed Vertical Grip
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Magazine_30rnd_Fast_Mag, sealM4A1Package_loud); // 30-Round Fast Mag
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Scope_Iron_Sights, sealM4A1Package_loud); // Iron Sights
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Ergonomic_Improved_Mag_Catch, sealM4A1Package_loud); // Mag Catch
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Ammo_Polymer_Case, sealM4A1Package_loud); // Polymer Case
+
+let sealM4A1Package_SD = mod.CreateNewWeaponPackage();
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Muzzle_CQB_Suppressor, sealM4A1Package_SD); // CQB Suppressor
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Barrel_125_Mid, sealM4A1Package_SD); // 12.5" mid barrel
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Top_5_mW_Red, sealM4A1Package_SD); // 5mW Red Laser
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Bottom_Ribbed_Vertical, sealM4A1Package_SD); // Ribbed Vertical Grip
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Magazine_30rnd_Fast_Mag, sealM4A1Package_SD); // 30-Round Fast Mag
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Scope_Iron_Sights, sealM4A1Package_SD); // Iron Sights
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Ergonomic_Improved_Mag_Catch, sealM4A1Package_SD); // Mag Catch
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Ammo_Polymer_Case, sealM4A1Package_SD); // Polymer Case
+
+// MERC LOADOUTS
+let merc552Package_loud = mod.CreateNewWeaponPackage();
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Muzzle_CQB_Suppressor, merc552Package_loud); // Compensated Brake
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Barrel_125_Fluted, merc552Package_loud); // 12.5" fluted barrel
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Right_5_mW_Red, merc552Package_loud); // 5mW Red Laser
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Bottom_Ribbed_Vertical, merc552Package_loud); // Ribbed Vertical Grip
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Magazine_30rnd_Fast_Mag, merc552Package_loud); // 30-Round Fast Mag
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Scope_Iron_Sights, merc552Package_loud); // Iron Sights
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Ergonomic_Improved_Mag_Catch, merc552Package_loud); // Mag Catch
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Ammo_Polymer_Case, merc552Package_loud); // Polymer Case
+
+let merc552Package_SD = mod.CreateNewWeaponPackage();
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Muzzle_CQB_Suppressor, merc552Package_SD); // CQB Suppressor
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Barrel_125_Mid, merc552Package_SD); // 12.5" mid barrel
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Right_5_mW_Red, merc552Package_SD); // 5mW Red Laser
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Bottom_Ribbed_Vertical, merc552Package_SD); // Ribbed Vertical Grip
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Magazine_30rnd_Fast_Mag, merc552Package_SD); // 30-Round Fast Mag
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Scope_Iron_Sights, merc552Package_SD); // Iron Sights
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Ergonomic_Improved_Mag_Catch, merc552Package_SD); // Mag Catch
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Ammo_Polymer_Case, merc552Package_SD); // Polymer Case
 ////////////////////////////////// PLAYER EVENTS ///////////////////////////////////////
 
 // Triggered when player joins the game. Useful for pregame setup, team management, etc.
@@ -351,7 +396,7 @@ export namespace SOCOM
             //      this.switchShoulderView();
 
             /* set zoom state */
-            this.isZooming = isCurrentlyZooming;
+            this.isZooming = ALLOW_ADS ? isCurrentlyZooming : false;
             let currentShoulder = this.viewType === SoldierCameraView.RightShoulder ? 0 : 1;
 
             /* update camera */
@@ -1014,6 +1059,7 @@ export namespace SOCOM
             
             mod.DisplayNotificationMessage(mod.Message("REDEPLOY TO SPECTATE"), this.player);
             console.log(`[CZSeal::OnPlayerDied] Player ${killerSeal.playerID} eliminated Player ${this.playerID}`);
+            log.info(mod.Message("{} eliminated {}", killerSeal.player, this.player));
         }
 
         /* called at the beginning of a round / match */
@@ -1031,6 +1077,21 @@ export namespace SOCOM
                 await mod.Wait(1); // wait 1 frame
                 mod.SetCameraTypeForPlayer(this.player, mod.Cameras.ThirdPerson, this.camera.viewType === SoldierCameraView.RightShoulder ? 0 : 1);
             }
+
+            if (DEFAULT_LOADOUTS)
+            {
+                /* get the weapon and package based on team */
+                let weapon = this.teamID === SoldierTeam.SEALS ? mod.Weapons.Carbine_M4A1 : mod.Weapons.Carbine_SG_553R;
+                let weapon_package = this.teamID === SoldierTeam.SEALS ? sealM4A1Package_loud : merc552Package_loud;
+
+                /* remove the players primary and secondary weapons first */
+                mod.RemoveEquipment(this.player, mod.InventorySlots.PrimaryWeapon);
+                await mod.Wait(1); // wait 1 frame
+
+                /* give the player their default weapon */
+                mod.AddEquipment(this.player, weapon, weapon_package);
+            }
+
             mod.EnableAllInputRestrictions(this.player, false); // disable input restrictions just incase anything is lingering from last round
             this.__updateScoreboardEntry(); // update scoreboard entry
         }
@@ -3694,10 +3755,10 @@ export namespace Utility {
             #messages: LogMessage[] = [];
             #maxVisible: number = 20;
             #cleanupLogAfterSeconds: number = 10;
-            #debugTextColor: mod.Vector = mod.CreateVector(1, 1, 1);
-            #infoTextColor: mod.Vector = mod.CreateVector(65/255, 89/255, 130/255);
-            #warningTextColor: mod.Vector = mod.CreateVector(1, 193/255, 0);
-            #errorTextColor: mod.Vector = mod.CreateVector(1, 69/255, 69/255);
+            #debugTextColor: mod.Vector = mod.CreateVector(65/255, 89/255, 130/255); // light blue
+            #infoTextColor: mod.Vector = mod.CreateVector(1, 1, 1); // white 
+            #warningTextColor: mod.Vector = mod.CreateVector(1, 193/255, 0); // yellow
+            #errorTextColor: mod.Vector = mod.CreateVector(1, 69/255, 69/255); // red
 
             constructor(logLevel: LogLevel = LogLevel.Debug, maxVisible: number = 20, cleanupLogAfterSeconds: number = 10) {
                 this.#maxVisible = maxVisible;
