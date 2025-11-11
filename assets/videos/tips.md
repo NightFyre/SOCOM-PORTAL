@@ -13,7 +13,7 @@ szStroke: 6
 TITLE: descriptive ( lower case )
 pos: header ( 1681 )
 font: Impact
-size: 65
+size: 40
 color: #ffffff
 stroke: #4b636d
 szStroke: 2
