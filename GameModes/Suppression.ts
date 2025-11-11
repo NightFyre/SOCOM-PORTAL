@@ -36,12 +36,6 @@ const DEBUG_LOG = true;
 const HOSTED = false;
 
 // FLAGS FOR GAMEMODE SETUP
-const HQ = 1;
-const DEPLOY_CAMERA = 3;
-const PLAYER_SPAWNERS = 50; // 50 - 99 (Team Spawn Points)
-const AI_SPAWNERS = 100; // 100 - 101 (HQ AI) | 102 (HOSTAGE) | 103 (VIP) | 104 (BOMB)
-const WORLD_ICON_PLAYERS = 700; // 700 - 715
-const SPECTATOR_OBJECTS = 50; // 50 - 51
 const MIN_PLAYERS_TO_START = 1; // minimum players required to start the match
 const MAX_PLAYERS_FOR_BOTS = 8; // maximum players before bots are removed
 const MAX_PLAYERS = 32;
@@ -51,7 +45,13 @@ const BOTS_IDLE = false; // whether bots should remain idle and not engage in co
 const ALLOW_ADS = false; // whether players are allowed to aim down sights
 const DEFAULT_LOADOUTS = true; // whether to give players default loadouts on spawn
 
-
+// 
+const HQ = 1; // 1 - 2 (Team HQs)
+const DEPLOY_CAMERA = 3; // 3 (Deploy Camera)
+const SPECTATOR_OBJECTS = 50; // 50 - 51 (Team Spectator Spawn Points)
+const AI_SPAWNERS = 100; // 100 - 101 (HQ AI) | 102 (HOSTAGE) | 103 (VIP) | 104 (BOMB)
+const WORLD_ICON_PLAYERS = 700; // 700 - 715
+const IDS_VFX = 800; // 800 - 805
 
 // SEAL LOADOUTS
 let sealM4A1Package_loud = mod.CreateNewWeaponPackage();
@@ -76,7 +76,7 @@ mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Ammo_Polymer_Case, sealM4
 
 // MERC LOADOUTS
 let merc552Package_loud = mod.CreateNewWeaponPackage();
-mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Muzzle_CQB_Suppressor, merc552Package_loud); // Compensated Brake
+mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Muzzle_Compensated_Brake, merc552Package_loud); // Compensated Brake
 mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Barrel_125_Fluted, merc552Package_loud); // 12.5" fluted barrel
 mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Right_5_mW_Red, merc552Package_loud); // 5mW Red Laser
 mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Bottom_Ribbed_Vertical, merc552Package_loud); // Ribbed Vertical Grip
@@ -94,6 +94,7 @@ mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Magazine_30rnd_Fast_Mag, 
 mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Scope_Iron_Sights, merc552Package_SD); // Iron Sights
 mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Ergonomic_Improved_Mag_Catch, merc552Package_SD); // Mag Catch
 mod.AddAttachmentToWeaponPackage(mod.WeaponAttachments.Ammo_Polymer_Case, merc552Package_SD); // Polymer Case
+
 ////////////////////////////////// PLAYER EVENTS ///////////////////////////////////////
 
 // Triggered when player joins the game. Useful for pregame setup, team management, etc.
@@ -214,12 +215,29 @@ export async function OnGameModeStarted()
     {
         const icon = mod.GetWorldIcon(WORLD_ICON_PLAYERS + i); // preload team player icons
         if (!icon)
+        {
+            console.log(`world icon with id ${WORLD_ICON_PLAYERS + i} not found. skipping...`);
             continue;
-
+        }
         mod.EnableWorldIconImage(icon, false); // disable icon image
         mod.EnableWorldIconText(icon, false); // disable icon text
         mod.SetWorldIconColor(icon, mod.CreateVector(1, 1, 1)); // white color
         mod.SetWorldIconPosition(icon, mod.CreateVector(0, 0, -100000)); // move icon out of view and bury it deep
+        console.log(`setup world icon with id ${WORLD_ICON_PLAYERS + i}`);
+    }
+
+    // enable VFX effects
+    for (let i = 0; i < 6; i++)
+    {
+        let vfx = mod.GetVFX(IDS_VFX + i);
+        if (!vfx)
+        {
+            console.log(`VFX with id ${IDS_VFX + i} not found. skipping...`);
+            continue;
+        }
+
+        mod.EnableVFX(vfx, true);
+        console.log(`Enabled VFX with id ${IDS_VFX + i}`);
     }
 
     // get bot spawners , HQs , and spectator spawn points
@@ -925,12 +943,15 @@ export namespace SOCOM
             let newHealth = mod.GetSoldierState(this.player, mod.SoldierStateNumber.CurrentHealth);
             let damageReceived = this.currentHealth - newHealth;
             this.currentHealth = newHealth; // sync current health
-            if ( this.currentHealth < 30 )
-            {
-                mod.Heal(this.player, 30 - this.currentHealth); // auto-heal to 35 health
-                this.currentHealth = 30; // update current health
-                console.log(`[CZSeal::OnPlayerDamaged] Player ${this.playerID} auto-healed to 30 health`);
-            }
+
+            /// @TODO: implement fix for low health effect
+            //  if ( this.currentHealth < 30 )
+            //  {
+            //      mod.Heal(this.player, 30 - this.currentHealth); // auto-heal to 35 health
+            //      this.currentHealth = 30; // update current health
+            //      console.log(`[CZSeal::OnPlayerDamaged] Player ${this.playerID} auto-healed to 30 health`);
+            //  }
+
             this.__updateScoreboardEntry(); // update scoreboard entry
 
             let shooter = CZSeal.get(eventOtherPlayer, undefined);
@@ -976,6 +997,11 @@ export namespace SOCOM
             // log damage info
             console.log(`[CZSeal::OnPlayerDamaged] Player ${shooter.playerID} damaged Player ${this.playerID} for ${damageReceived.toFixed(1)} damage`);
             // mod.DisplayHighlightedWorldLogMessage(mod.Message("{}", damageReceived.toFixed(1)), shooter.player);
+
+            if (this.currentHealth > 30 && this.currentHealth != 0)
+                return;
+
+            mod.DealDamage(this.player, this.currentHealth, eventOtherPlayer); // finish off the player if health is below threshold
         }
 
         /* triggered when the player dies */
@@ -1078,18 +1104,22 @@ export namespace SOCOM
                 mod.SetCameraTypeForPlayer(this.player, mod.Cameras.ThirdPerson, this.camera.viewType === SoldierCameraView.RightShoulder ? 0 : 1);
             }
 
+            /* give default loadout ( if applicable ) */
             if (DEFAULT_LOADOUTS)
             {
                 /* get the weapon and package based on team */
                 let weapon = this.teamID === SoldierTeam.SEALS ? mod.Weapons.Carbine_M4A1 : mod.Weapons.Carbine_SG_553R;
                 let weapon_package = this.teamID === SoldierTeam.SEALS ? sealM4A1Package_loud : merc552Package_loud;
 
-                /* remove the players primary and secondary weapons first */
-                mod.RemoveEquipment(this.player, mod.InventorySlots.PrimaryWeapon);
-                await mod.Wait(1); // wait 1 frame
-
                 /* give the player their default weapon */
-                mod.AddEquipment(this.player, weapon, weapon_package);
+                mod.AddEquipment(this.player, weapon, weapon_package, mod.InventorySlots.PrimaryWeapon);
+
+                /* disable overkill perk ( additional primary weapon ) */
+                if (mod.IsSoldierClass(this.player, mod.SoldierClass.Assault))
+                {
+                    mod.RemoveEquipment(this.player, mod.InventorySlots.GadgetOne); // remove gadget one from player
+                    mod.RemoveEquipment(this.player, mod.InventorySlots.GadgetTwo); // remove gadget two from player
+                }
             }
 
             mod.EnableAllInputRestrictions(this.player, false); // disable input restrictions just incase anything is lingering from last round
