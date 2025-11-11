@@ -36,14 +36,15 @@ const DEBUG_LOG = true;
 const HOSTED = false;
 
 // FLAGS FOR GAMEMODE SETUP
+const SHOULD_SPAWN_BOTS = true; // whether to spawn bots to fill empty player slots
+const BOTS_IDLE = false;        // whether bots should remain idle and not engage in combat
+const MAX_PLAYERS_FOR_BOTS = 12; // maximum players before bots are removed
 const MIN_PLAYERS_TO_START = 1; // minimum players required to start the match
-const MAX_PLAYERS_FOR_BOTS = 8; // maximum players before bots are removed
-const MAX_PLAYERS = 32;
-const MAX_PLAYERS_PER_TEAM = MAX_PLAYERS / 2;
+const MAX_PLAYERS = 32;         // maximum players allowed in the match
+const MAX_PLAYERS_PER_TEAM = MAX_PLAYERS / 2;   // maximum players allowed per team
 const END_ROUND_ON_LAST_ELIMINATED_PLAYER = true; // whether to end the round when the last player on a team is eliminated when bots are backfilling empty player slots
-const BOTS_IDLE = false; // whether bots should remain idle and not engage in combat
-const ALLOW_ADS = false; // whether players are allowed to aim down sights
-const DEFAULT_LOADOUTS = true; // whether to give players default loadouts on spawn
+const DEFAULT_LOADOUTS = false;     // whether to give players default loadouts on spawn
+const ALLOW_ADS = true;             // whether players are allowed to aim down sights
 
 // 
 const HQ = 1; // 1 - 2 (Team HQs)
@@ -866,9 +867,8 @@ export namespace SOCOM
             this.updateIcon();
 
             /* update ai pathing & behavior */
-            //  if (this.isAI)
-            //    this.updateAIPath();
-
+            if (this.isAI)
+                this.updateAIPath();
         }
 
         /* update the player name tag icon - team, position, and text. does not update the icon visibility state */
@@ -998,10 +998,10 @@ export namespace SOCOM
             console.log(`[CZSeal::OnPlayerDamaged] Player ${shooter.playerID} damaged Player ${this.playerID} for ${damageReceived.toFixed(1)} damage`);
             // mod.DisplayHighlightedWorldLogMessage(mod.Message("{}", damageReceived.toFixed(1)), shooter.player);
 
-            if (this.currentHealth > 30 && this.currentHealth != 0)
-                return;
-
-            mod.DealDamage(this.player, this.currentHealth, eventOtherPlayer); // finish off the player if health is below threshold
+            /// elimination finish-off logic
+            //  if (this.currentHealth > 30 && this.currentHealth != 0)
+            //      return;
+            //  mod.DealDamage(this.player, this.currentHealth, eventOtherPlayer); // finish off the player if health is below threshold
         }
 
         /* triggered when the player dies */
@@ -1113,13 +1113,13 @@ export namespace SOCOM
 
                 /* give the player their default weapon */
                 mod.AddEquipment(this.player, weapon, weapon_package, mod.InventorySlots.PrimaryWeapon);
+            }
 
-                /* disable overkill perk ( additional primary weapon ) */
-                if (mod.IsSoldierClass(this.player, mod.SoldierClass.Assault))
-                {
-                    mod.RemoveEquipment(this.player, mod.InventorySlots.GadgetOne); // remove gadget one from player
-                    mod.RemoveEquipment(this.player, mod.InventorySlots.GadgetTwo); // remove gadget two from player
-                }
+            /* disable overkill perk ( additional primary weapon ) */
+            if (mod.IsSoldierClass(this.player, mod.SoldierClass.Assault))
+            {
+                mod.RemoveEquipment(this.player, mod.InventorySlots.GadgetOne); // remove gadget one from player
+                mod.RemoveEquipment(this.player, mod.InventorySlots.GadgetTwo); // remove gadget two from player
             }
 
             mod.EnableAllInputRestrictions(this.player, false); // disable input restrictions just incase anything is lingering from last round
@@ -1511,7 +1511,7 @@ export namespace SOCOM
 
             /* add bots if player count is low (only count human players) */
             let humanPlayers = CZMatchData.players - CZMatchData.bots;
-            if (humanPlayers < MAX_PLAYERS_FOR_BOTS)
+            if (SHOULD_SPAWN_BOTS && humanPlayers < MAX_PLAYERS_FOR_BOTS)
             {
                 let totalBotsNeeded = MAX_PLAYERS_FOR_BOTS - humanPlayers;
                 let targetPlayersPerTeam = MAX_PLAYERS_FOR_BOTS / 2;
