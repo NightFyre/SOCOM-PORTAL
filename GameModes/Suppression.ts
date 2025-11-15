@@ -36,11 +36,13 @@ const DEBUG_LOG = true;
 const HOSTED = false;
 
 // FLAGS FOR GAMEMODE SETUP
+const MATCH_TIME_LIMIT = 60 * 60; // match time limit in seconds ( 60 minutes )
 const SHOULD_SPAWN_BOTS = true; // whether to spawn bots to fill empty player slots
-const BOTS_IDLE = false;        // whether bots should remain idle and not engage in combat
+const BOTS_IDLE = false;        // whether bots should remain idle and not engage in combat ( also disables AI pathing , which seemingly is causing crashes right now )
+const BOTS_PATHING_ENABLED = false; // whether bots should use custom pathing to navigate
 const MAX_PLAYERS_FOR_BOTS = 12; // maximum players before bots are removed
 const MIN_PLAYERS_TO_START = 1; // minimum players required to start the match
-const MAX_PLAYERS = 32;         // maximum players allowed in the match
+const MAX_PLAYERS = 16;         // maximum players allowed in the match
 const MAX_PLAYERS_PER_TEAM = MAX_PLAYERS / 2;   // maximum players allowed per team
 const END_ROUND_ON_LAST_ELIMINATED_PLAYER = true; // whether to end the round when the last player on a team is eliminated when bots are backfilling empty player slots
 const DEFAULT_LOADOUTS = false;     // whether to give players default loadouts on spawn
@@ -172,6 +174,8 @@ export async function OnGameModeStarted()
 {
     log.info(mod.Message("SOCOM IN BATTLEFIELD - SUPPRESSION"));
 
+    mod.SetGameModeTimeLimit(MATCH_TIME_LIMIT);
+
     /* Initialize UI widgets */
     UI.RoundInfoWidget.init();
     UI.ScoreboardWidget.init();
@@ -204,7 +208,7 @@ export async function OnGameModeStarted()
             mod.Message(mod.stringkeys.sbCol2), // Kills
             mod.Message(mod.stringkeys.sbCol3), // Deaths
             mod.Message(mod.stringkeys.sbCol4), // Assists
-            mod.Message(mod.stringkeys.sbCol5), // Alive
+            mod.Message(mod.stringkeys.sbCol5), // Health
         )
 
         let colWidth = 10;
@@ -239,6 +243,7 @@ export async function OnGameModeStarted()
 
         mod.EnableVFX(vfx, true);
         console.log(`Enabled VFX with id ${IDS_VFX + i}`);
+        SOCOM.CZMatchData.objVFX.push(vfx);
     }
 
     // get bot spawners , HQs , and spectator spawn points
@@ -723,6 +728,7 @@ export namespace SOCOM
         currentHealth = 100;
         isArmed: boolean = true;
         isSpectator: boolean = false;
+        isBadActor: boolean = false; // whether the player is flagged as a bad actor (team killing, griefing, etc.) NOTE: can be removed via admin panel
 
         // zoom pattern detection for shoulder switching
         inputDetector = new Utility.Input();
@@ -731,6 +737,7 @@ export namespace SOCOM
                 
         // Per-player Spectate Camera UI (only for players who are dead)
         spectateCamera?: UI.SpectateCamWidget | undefined;
+        adminPanelUI?: UI.AdminPanelWidget | undefined; // only given to host / admins
 
         welcomeUI;
 
@@ -883,10 +890,10 @@ export namespace SOCOM
         lastAIPathUpdateTime: number = 0;
         private updateAIPath() : void
         {
-            if (BOTS_IDLE)
+            if (BOTS_PATHING_ENABLED == false)
                 return;
 
-            if (!this.isSealAlive() || !this.isAI)
+            if (!this.isAI || !this.isSealAlive())
                 return;
 
             let currentTime = mod.GetMatchTimeElapsed();
@@ -1085,7 +1092,12 @@ export namespace SOCOM
             
             mod.DisplayNotificationMessage(mod.Message("REDEPLOY TO SPECTATE"), this.player);
             console.log(`[CZSeal::OnPlayerDied] Player ${killerSeal.playerID} eliminated Player ${this.playerID}`);
-            log.info(mod.Message("{} eliminated {}", killerSeal.player, this.player));
+            let msg = mod.Message("{} eliminated {}", killerSeal.player, this.player);
+            switch (killerSeal.teamID)
+            {
+                case SoldierTeam.SEALS: log.seal(msg); break;
+                case SoldierTeam.MERCS: log.merc(msg); break;
+            }
         }
 
         /* called at the beginning of a round / match */
@@ -1122,6 +1134,8 @@ export namespace SOCOM
                 mod.RemoveEquipment(this.player, mod.InventorySlots.GadgetTwo); // remove gadget two from player
             }
 
+            mod.SetInventoryAmmo(this.player, mod.InventorySlots.Throwable, 3); // give 3 grenades
+            mod.SetInventoryMagazineAmmo(this.player, mod.InventorySlots.Throwable, 3); // give 3 grenades
             mod.EnableAllInputRestrictions(this.player, false); // disable input restrictions just incase anything is lingering from last round
             this.__updateScoreboardEntry(); // update scoreboard entry
         }
@@ -1287,12 +1301,13 @@ export namespace SOCOM
         //  static host: mod.Player | undefined; // host player
         //  static hostID: number = -1; // host player ID
         static matchTime: number = 0; // total accumulated match time in seconds
-        static players: number = 0; // total players in the match ( includes bots)
+        static players: number = 0; // total players in the match ( includes bots )
         static bots: number = 0; // number of AI bots in the match
-        static teams: number[] = [0, 0]; // number of players per team [team1, team2]
+        static teams: number[] = [0, 0]; // number of players per team [team1, team2] ( includes bots )
         static botIDs: number[] = []; // list of bot player IDs in the match
         static HeadQuarters: mod.Object[] = []; // list of HQ objects in the map 
         static botSpawners: mod.Spawner[] = []; // list of bot spawners in the map
+        static objVFX : mod.VFX[] = []; // list of VFX objects in the map
         static spawnOrigins: mod.Vector[] = []; // list of spawn origins for each team
         static isSpawnModeEnabled: boolean = false; // whether spawn mode is enabled [ determnined via obtaining bot spawners in the map ]
 
@@ -1459,9 +1474,26 @@ export namespace SOCOM
             await UI.ScoreboardWidget.renderScoreboard(winner, true, 20); // display scoreboard for 20 seconds
             // await mod.Wait(15); // wait 15 seconds before resetting the match
 
-            let host = CZMatchData.getHostPlayer();
-            if (host)
-                mod.EndGameMode(host);
+            /// 
+            //  let host = CZMatchData.getHostPlayer();
+            //  if (host)
+            //      mod.EndGameMode(host);
+
+            /* patch to give everybody victory for now */
+            mod.EnableAllPlayerDeploy(false); // allow redeployment for all players
+            mod.UndeployAllPlayers(); // undeploy all players
+            for (let player of CZSeal.sealObjects)
+            {
+                let seal = CZSeal.get(player, undefined);
+                if (!seal)
+                    continue;
+
+                mod.SetTeam(seal.player, mod.GetTeam(winner)); // set all players to winning team
+                await mod.Wait(0.2); // wait a bit between spawns for proper registration
+            }
+
+            /* handle victory result */
+            mod.EndGameMode(mod.GetTeam(winner)); // end game mode and give victory to the winning team
         }
 
         /* prepares for a new round */
@@ -1672,7 +1704,9 @@ export namespace SOCOM
                     seal.SetInputMode(true);
                 }
             }
-            mod.EnableAllPlayerDeploy(false); // disable redeployment for all players
+
+            /* disable redeployment for all players */
+            mod.EnableAllPlayerDeploy(false);
 
             /* update team counts by removing all bots */
             for (let botID of botsToRemove) {
@@ -1696,16 +1730,33 @@ export namespace SOCOM
 
             /* Check for match end */
             // @TODO: implement overtime rounds for ties at max score
-            if (CZMatchData.scores[0] >= 6 || CZMatchData.scores[1] >= 6 || CZMatchData.roundNum >= CZMatchData.roundMax)
-                await CZMatchData.endMatch(winner);
-            else
+            let victory_condition = CZMatchData.scores[0] >= 6 || CZMatchData.scores[1] >= 6 || (CZMatchData.roundNum >= CZMatchData.roundMax && CZMatchData.scores[0] !== CZMatchData.scores[1]); // match ends if a team reaches 6 wins or it's the end of round 11 and one team has more rounds won
+            //  let overtime_condition = CZMatchData.roundNum >= CZMatchData.roundMax || CZMatchData.scores[0] === CZMatchData.scores[1]; // match ends if max rounds reached
+            
+            /* end match if victory condition met */
+            if (victory_condition)
             {
+                await CZMatchData.endMatch(winner); // end the match in case of victory
+                return;
+            }
+
+            ///  /* handle overtime condition & continue into the next round */
+            ///  if (!victory_condition && overtime_condition)
+            ///  {
+            ///      // move onto the next round ?
+            ///      await CZMatchData.preRound(); // prepare for the next round
+            ///      return;
+            ///  }
+
+            //  if (CZMatchData.scores[0] >= 6 || CZMatchData.scores[1] >= 6 || CZMatchData.roundNum >= CZMatchData.roundMax)
+            //      await CZMatchData.endMatch(winner);
+            //  else
+            //  {
                 // @TODO: display scoreboard ui
                 mod.DisplayNotificationMessage(mod.Message("PREPARING FOR THE NEXT ROUND"));
                 await UI.ScoreboardWidget.renderScoreboard(winner, false, 10); // display scoreboard for 10 seconds
-                //  await mod.Wait(7); // wait a few seconds before preparing for the next round
                 await CZMatchData.preRound(); // prepare for the next round
-            }
+            //  }
         }
 
         /* triggered when a player joins the game */
@@ -1715,17 +1766,39 @@ export namespace SOCOM
             if (!seal)
                 return; // invalid seal object
 
-            log.info(mod.Message("{} joined the game", eventPlayer, seal.teamID));
+            log.info(mod.Message("{} joined the game", eventPlayer));
 
-            mod.SetRedeployTime(eventPlayer, 0.0); // disable redeploy timer
-            
+            /* disable redeploy / respawn initially while setting up player */
+            mod.EnablePlayerDeploy(eventPlayer, false);
+
+            /* handle player setup */
             if (!seal.isAI) {
-            /* add player count to match data (bots are handled separately in OnSpawnBot) */
+                
+                if (seal.isSealAlive())
+                    mod.UndeployPlayer(eventPlayer); // undeploy player while setting up
+
+                /* assign team */
+                /* 
+                    first join will have 0 players on both teams , assign to SEALS (teamID 1)
+                    subsequent joins will assign to the team with the least players
+                */
+                let teamID = CZMatchData.teams[0] <= CZMatchData.teams[1] ? 1 : 2; // assign to team with least players or default to SEALs
+                if (teamID !== seal.teamID)
+                {    
+                    console.log(`[CZMatchData::OnPlayerJoined] Changing Player ${seal.playerID} from Team ${seal.teamID} to Team ${teamID}`);
+                    mod.SetTeam(eventPlayer, mod.GetTeam(teamID)); // set player team
+                    seal.teamID = teamID; // update seal team id
+                    seal.playerTeam = mod.GetTeam(teamID); // update seal team object
+                }
+
+                /* add player count to match data (bots are handled separately in OnSpawnBot) */
                 CZMatchData.players++; // increment player count for human players
                 CZMatchData.teams[seal.teamID - 1]++; // increment team player count for human players
             }
             // Note: Bot counting is handled in OnSpawnBot to avoid double-counting
 
+            /* setup complete , enable redeploy */
+            mod.SetRedeployTime(eventPlayer, 0.0); // disable redeploy timer
 
             // check if the match is in progress
             if (CZMatchData.state !== GameState.WaitingForPlayers && seal.isAI === false)
@@ -1734,11 +1807,13 @@ export namespace SOCOM
                 // hopefully everything else is handled on the start of the new round.
                 seal.isAlive = false; // set player as dead
                 seal.isArmed = true; // set flag so player is disarmed if a deployment happens to occur
-                mod.EnablePlayerDeploy(eventPlayer, false); // disable redeploy / respawn
+                // mod.EnablePlayerDeploy(eventPlayer, false); // disable redeploy / respawn : deprecated as handled above
                 console.log(`[CZMatchData::OnPlayerJoined] Player ${seal.playerID} joined during active match , set as dead`);
                 return;
             }
 
+            /* finish setup */
+            mod.EnablePlayerDeploy(eventPlayer, true);  // enable redeploy / respawn after setup
             console.log(`[CZMatchData::OnPlayerJoined] Player Joined: ID: ${seal.playerID} | TeamID: ${seal.teamID} | isAI: ${seal.isAI} | Total Clients: ${CZMatchData.players}`);
         }
 
@@ -3020,6 +3095,7 @@ export namespace UI {
         }
     }
 
+    //  Scoreboard Widget
     export class ScoreboardWidget
     {
         // 
@@ -3677,12 +3753,302 @@ export namespace UI {
         }
     }
 
+    //  Scoreboard - Score Entry Widget
     export class ScoreEntryWidget
     {
         OriginWidget: mod.UIWidget | undefined;
         //  seal: SOCOM.CZSeal;
     }
+
+    export class AdminPanelWidget {
+
+        OriginWidget: mod.UIWidget | undefined;
+        seal: SOCOM.CZSeal;
+
+        constructor(seal: SOCOM.CZSeal) {
+            this.seal = seal;
+
+            this.OriginWidget = modlib.ParseUI({
+                name: "Container_AdminPanel",
+                type: "Container",
+                position: [0, 0],
+                size: [300, 250],
+                anchor: mod.UIAnchor.Center,
+                visible: true,
+                padding: 0,
+                bgColor: [0.2, 0.2, 0.2],
+                bgAlpha: 1,
+                bgFill: mod.UIBgFill.None,
+                playerId: seal.player,
+                children: [
+                    {
+                    name: "Container_Bots",
+                    type: "Container",
+                    position: [0, 0],
+                    size: [300, 50],
+                    anchor: mod.UIAnchor.TopCenter,
+                    visible: true,
+                    padding: 0,
+                    bgColor: [0.2, 0.2, 0.2],
+                    bgAlpha: 1,
+                    bgFill: mod.UIBgFill.None,
+                    children: [
+                        {
+                        name: "Text_JD0VV",
+                        type: "Text",
+                        position: [0, 0],
+                        size: [100, 50],
+                        anchor: mod.UIAnchor.TopLeft,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        textLabel: mod.stringkeys.Text_JD0VV,
+                        textColor: [1, 1, 1],
+                        textAlpha: 1,
+                        textSize: 24,
+                        textAnchor: mod.UIAnchor.Center
+                        },
+                        {
+                        name: "Container_Bots_Controller",
+                        type: "Container",
+                        position: [0, 0],
+                        size: [200, 50],
+                        anchor: mod.UIAnchor.TopRight,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        children: [
+                            {
+                            name: "Button_BC_Sub",
+                            type: "Button",
+                            position: [0, 0],
+                            size: [75, 50],
+                            anchor: mod.UIAnchor.TopLeft,
+                            visible: true,
+                            padding: 0,
+                            bgColor: [1, 1, 1],
+                            bgAlpha: 1,
+                            bgFill: mod.UIBgFill.Solid,
+                            buttonEnabled: true,
+                            buttonColorBase: [1, 1, 1],
+                            buttonAlphaBase: 0,
+                            buttonColorDisabled: [0.1, 0.1, 0.1],
+                            buttonAlphaDisabled: 0.5,
+                            buttonColorPressed: [0.2, 0.2, 0.2],
+                            buttonAlphaPressed: 1,
+                            buttonColorHover: [0.4, 0.4, 0.4],
+                            buttonAlphaHover: 1,
+                            buttonColorFocused: [0.5, 0.5, 0.5],
+                            buttonAlphaFocused: 1
+                            },
+                            {
+                            name: "Button_BC_Add",
+                            type: "Button",
+                            position: [0, 0],
+                            size: [75, 50],
+                            anchor: mod.UIAnchor.TopRight,
+                            visible: true,
+                            padding: 0,
+                            bgColor: [1, 1, 1],
+                            bgAlpha: 1,
+                            bgFill: mod.UIBgFill.Solid,
+                            buttonEnabled: true,
+                            buttonColorBase: [1, 1, 1],
+                            buttonAlphaBase: 0,
+                            buttonColorDisabled: [0.1, 0.1, 0.1],
+                            buttonAlphaDisabled: 0.5,
+                            buttonColorPressed: [0.2, 0.2, 0.2],
+                            buttonAlphaPressed: 1,
+                            buttonColorHover: [0.4, 0.4, 0.4],
+                            buttonAlphaHover: 1,
+                            buttonColorFocused: [0.5, 0.5, 0.5],
+                            buttonAlphaFocused: 1
+                            },
+                            {
+                            name: "Text_BC_Value",
+                            type: "Text",
+                            position: [0, 0],
+                            size: [50, 50],
+                            anchor: mod.UIAnchor.Center,
+                            visible: true,
+                            padding: 0,
+                            bgColor: [0.2, 0.2, 0.2],
+                            bgAlpha: 1,
+                            bgFill: mod.UIBgFill.None,
+                            textLabel: mod.stringkeys.Text_BC_Value,
+                            textColor: [1, 1, 1],
+                            textAlpha: 1,
+                            textSize: 24,
+                            textAnchor: mod.UIAnchor.Center
+                            },
+                            {
+                            name: "Text_BC_Sub",
+                            type: "Text",
+                            position: [0, 0],
+                            size: [75, 50],
+                            anchor: mod.UIAnchor.TopLeft,
+                            visible: true,
+                            padding: 0,
+                            bgColor: [0.2, 0.2, 0.2],
+                            bgAlpha: 1,
+                            bgFill: mod.UIBgFill.None,
+                            textLabel: mod.stringkeys.Text_BC_Sub,
+                            textColor: [1, 1, 1],
+                            textAlpha: 1,
+                            textSize: 34,
+                            textAnchor: mod.UIAnchor.Center
+                            },
+                            {
+                            name: "Text_BC_Add",
+                            type: "Text",
+                            position: [0, 0],
+                            size: [75, 50],
+                            anchor: mod.UIAnchor.TopRight,
+                            visible: true,
+                            padding: 0,
+                            bgColor: [0.2, 0.2, 0.2],
+                            bgAlpha: 1,
+                            bgFill: mod.UIBgFill.None,
+                            textLabel: mod.stringkeys.Text_BC_Add,
+                            textColor: [1, 1, 1],
+                            textAlpha: 1,
+                            textSize: 32,
+                            textAnchor: mod.UIAnchor.Center
+                            }
+                        ]
+                        }
+                    ]
+                    },
+                    {
+                    name: "Container_BalanceTeams",
+                    type: "Container",
+                    position: [0, 50],
+                    size: [300, 50],
+                    anchor: mod.UIAnchor.TopLeft,
+                    visible: true,
+                    padding: 0,
+                    bgColor: [0.2, 0.2, 0.2],
+                    bgAlpha: 1,
+                    bgFill: mod.UIBgFill.None,
+                    children: [
+                        {
+                        name: "Button_BalanceTeams",
+                        type: "Button",
+                        position: [0, 0],
+                        size: [300, 50],
+                        anchor: mod.UIAnchor.Center,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [1, 1, 1],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.Solid,
+                        buttonEnabled: true,
+                        buttonColorBase: [1, 1, 1],
+                        buttonAlphaBase: 0.5,
+                        buttonColorDisabled: [0.1, 0.1, 0.1],
+                        buttonAlphaDisabled: 0.5,
+                        buttonColorPressed: [0.2, 0.2, 0.2],
+                        buttonAlphaPressed: 1,
+                        buttonColorHover: [0.4, 0.4, 0.4],
+                        buttonAlphaHover: 1,
+                        buttonColorFocused: [0.5, 0.5, 0.5],
+                        buttonAlphaFocused: 1
+                        },
+                        {
+                        name: "Text_BalanceTeams",
+                        type: "Text",
+                        position: [0, 0],
+                        size: [300, 50],
+                        anchor: mod.UIAnchor.Center,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        textLabel: mod.stringkeys.Text_BalanceTeams,
+                        textColor: [1, 1, 1],
+                        textAlpha: 1,
+                        textSize: 24,
+                        textAnchor: mod.UIAnchor.Center
+                        }
+                    ]
+                    },
+                    {
+                    name: "Container_KickPlayers",
+                    type: "Container",
+                    position: [0, 0],
+                    size: [300, 50],
+                    anchor: mod.UIAnchor.Center,
+                    visible: true,
+                    padding: 0,
+                    bgColor: [0.2, 0.2, 0.2],
+                    bgAlpha: 1,
+                    bgFill: mod.UIBgFill.None,
+                    children: [
+                        {
+                        name: "Button_KickPlayers",
+                        type: "Button",
+                        position: [0, 0],
+                        size: [300, 50],
+                        anchor: mod.UIAnchor.TopCenter,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [1, 1, 1],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.Solid,
+                        buttonEnabled: true,
+                        buttonColorBase: [1, 1, 1],
+                        buttonAlphaBase: 0.5,
+                        buttonColorDisabled: [0.1, 0.1, 0.1],
+                        buttonAlphaDisabled: 0.5,
+                        buttonColorPressed: [0.2, 0.2, 0.2],
+                        buttonAlphaPressed: 1,
+                        buttonColorHover: [0.4, 0.4, 0.4],
+                        buttonAlphaHover: 1,
+                        buttonColorFocused: [0.5, 0.5, 0.5],
+                        buttonAlphaFocused: 1
+                        },
+                        {
+                        name: "Text_KickPlayers",
+                        type: "Text",
+                        position: [0, 0],
+                        size: [300, 50],
+                        anchor: mod.UIAnchor.Center,
+                        visible: true,
+                        padding: 0,
+                        bgColor: [0.2, 0.2, 0.2],
+                        bgAlpha: 1,
+                        bgFill: mod.UIBgFill.None,
+                        textLabel: mod.stringkeys.Text_KickPlayers,
+                        textColor: [1, 1, 1],
+                        textAlpha: 1,
+                        textSize: 24,
+                        textAnchor: mod.UIAnchor.Center
+                        }
+                    ]
+                    }
+                ]
+            }
+            );
+
+        }        
+
+        toggleVisible(isVisible: boolean): void {
+            if (!this.OriginWidget) 
+                return;
+
+            mod.SetUIWidgetVisible(this.OriginWidget, isVisible);
+        }
+    }
+
+
 }
+
+
 
 export namespace Utility {
 
@@ -3789,6 +4155,8 @@ export namespace Utility {
             #infoTextColor: mod.Vector = mod.CreateVector(1, 1, 1); // white 
             #warningTextColor: mod.Vector = mod.CreateVector(1, 193/255, 0); // yellow
             #errorTextColor: mod.Vector = mod.CreateVector(1, 69/255, 69/255); // red
+            #mercTextColor: mod.Vector = mod.CreateVector(1, 0.302, 0.302); // light red
+            #sealTextColor: mod.Vector = mod.CreateVector(0.2, 0.6, 1); // light blue
 
             constructor(logLevel: LogLevel = LogLevel.Debug, maxVisible: number = 20, cleanupLogAfterSeconds: number = 10) {
                 this.#maxVisible = maxVisible;
@@ -3842,7 +4210,7 @@ export namespace Utility {
                         }
                         visibleMessage = true;
 
-                        const yPos = j * 12;
+                        const yPos = j * 18; // 18 pixels per message height
                         mod.SetUIWidgetPosition(message.textWidget, mod.CreateVector(0, yPos, 0));
                         j++;
                     }
@@ -3935,6 +4303,32 @@ export namespace Utility {
                     this.#messages.push({
                         message: msg,
                         level: LogLevel.Error,
+                        textWidget: textWidget,
+                        displayed: false,
+                        displayedAt: -1
+                    });
+                }
+            }
+
+            seal(...messages: mod.Message[]): void {
+                for (const msg of messages) {
+                    const textWidget = _createLogTextWidget(msg, this.#sealTextColor, false, this.#rootUi);
+                    this.#messages.push({
+                        message: msg,
+                        level: LogLevel.Info,
+                        textWidget: textWidget,
+                        displayed: false,
+                        displayedAt: -1
+                    });
+                }
+            }
+
+            merc(...messages: mod.Message[]): void {
+                for (const msg of messages) {
+                    const textWidget = _createLogTextWidget(msg, this.#mercTextColor, false, this.#rootUi);
+                    this.#messages.push({
+                        message: msg,
+                        level: LogLevel.Info,
                         textWidget: textWidget,
                         displayed: false,
                         displayedAt: -1
