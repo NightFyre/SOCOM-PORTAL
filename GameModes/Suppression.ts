@@ -47,6 +47,7 @@ const MAX_PLAYERS_PER_TEAM = MAX_PLAYERS / 2;   // maximum players allowed per t
 const END_ROUND_ON_LAST_ELIMINATED_PLAYER = true; // whether to end the round when the last player on a team is eliminated when bots are backfilling empty player slots
 const DEFAULT_LOADOUTS = false;     // whether to give players default loadouts on spawn
 const ALLOW_ADS = true;             // whether players are allowed to aim down sights
+const GRENADE_COUNT = 3;         // number of grenades given to each player on spawn
 
 // 
 const HQ = 1; // 1 - 2 (Team HQs)
@@ -1134,8 +1135,8 @@ export namespace SOCOM
                 mod.RemoveEquipment(this.player, mod.InventorySlots.GadgetTwo); // remove gadget two from player
             }
 
-            mod.SetInventoryAmmo(this.player, mod.InventorySlots.Throwable, 3); // give 3 grenades
-            mod.SetInventoryMagazineAmmo(this.player, mod.InventorySlots.Throwable, 3); // give 3 grenades
+            mod.SetInventoryAmmo(this.player, mod.InventorySlots.Throwable, GRENADE_COUNT); // give 3 grenades
+            mod.SetInventoryMagazineAmmo(this.player, mod.InventorySlots.Throwable, GRENADE_COUNT); // give 3 grenades
             mod.EnableAllInputRestrictions(this.player, false); // disable input restrictions just incase anything is lingering from last round
             this.__updateScoreboardEntry(); // update scoreboard entry
         }
