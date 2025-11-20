@@ -1,5 +1,5 @@
-import * as modlib from '../PortalSDK/code/modlib'; // for local testing
 // import * as modlib from 'modlib'; // required on server side
+import * as modlib from '../PortalSDK/code/modlib'; // for local testing
 
 // Triggered when player joins the game. Useful for pregame setup, team management, etc.
 export function OnPlayerJoinGame(eventPlayer: mod.Player): void 
