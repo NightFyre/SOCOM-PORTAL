@@ -11,12 +11,12 @@ Our goal is to bring back the classic **team-based, objective-focused combat** t
 - [x] Player State system  
 - [x] Player Stats tracking  
 - [ ] Team balancing logic
-- [ ] Round management system  
-- [ ] Victory condition detection  
+- [x] Round management system  
+- [x] Victory condition detection  
 
 ### 🎮 Phase 2: Gameplay Mechanics
 - [x] 3rd Person Camera
-- [ ] Spectator system  
+- [x] Spectator system  
 - [ ] Respawn & extraction logic  
 - [ ] Objective interaction zones (bomb plant, hostage rescue, etc.)  
 - [ ] Map-specific spawn logic  
